@@ -2,3 +2,7 @@ name = "fantasy-proxy"
 main = "fantasy-proxy.js"
 compatibility_date = "2026-08-01"
 workers_dev = true
+
+[[kv_namespaces]]
+binding = "SYNC"
+id = "fd1bb848f3f34d3a8ece4e5e17193a2b"

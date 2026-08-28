@@ -44,11 +44,18 @@ def sign(n):
     return ("+" if n > 0 else "") + fmt_m(n)
 
 
+def madrid_now():
+    from datetime import datetime, timezone, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Europe/Madrid"))
+    except Exception:  # sin tzdata (Windows local): aproximamos con UTC+2
+        return datetime.now(timezone(timedelta(hours=2)))
+
+
 def today_madrid_int():
     try:
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-        return int(datetime.now(ZoneInfo("Europe/Madrid")).strftime("%Y%m%d"))
+        return int(madrid_now().strftime("%Y%m%d"))
     except Exception:
         return None
 
@@ -110,11 +117,94 @@ def analyze(comp):
     return ups, downs, cheap[:3]
 
 
+def fetch_personal():
+    """Datos personales (plantilla, vigilados, dinero) desde la nube del Worker."""
+    key = os.environ.get("FANTASY_SYNC_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        url = f"https://fantasy-proxy.manugrraa.workers.dev/sync/{key}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; FantasyStudio/1.0)"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except Exception as e:
+        print("sync no disponible:", e, file=sys.stderr)
+        return None
+
+
+def player_delta(comp, pid, players_by_id, hist):
+    p = players_by_id.get(str(pid))
+    h = hist.get(str(pid))
+    if not p or not h or len(h) < 2:
+        return None
+    return p, h[-1][1] - h[-2][1], h[-1][1]
+
+
+def personal_section(personal):
+    """Sección personalizada: SOLO vigilados (no favoritos) + plantilla + dinero."""
+    if not personal:
+        return []
+    comp = "2"
+    players = load(f"players_{comp}.json", [])
+    by_id = {str(p["id"]): p for p in players}
+    hist = load(f"history_{comp}.json", {})
+    out = []
+
+    money = ((personal.get("money") or {}).get(comp))
+    squad = (personal.get("squad") or {}).get(comp) or []
+    watch = (personal.get("watch") or {}).get(comp) or []
+
+    sq_lines = []
+    for e in squad:
+        if e.get("custom") or not e.get("pid"):
+            continue
+        r = player_delta(comp, e["pid"], by_id, hist)
+        if r and r[1]:
+            p, d1, _ = r
+            sq_lines.append(f"{p['nickname']} {sign(d1)}")
+    w_lines = []
+    hits = []
+    for w in watch:
+        if not w.get("pid"):
+            continue
+        r = player_delta(comp, w["pid"], by_id, hist)
+        if not r:
+            continue
+        p, d1, val = r
+        w_lines.append(f"{p['nickname']} {sign(d1) if d1 else '='}")
+        target = w.get("target")
+        if target:
+            reached = val >= target if w.get("dir") == "above" else val <= target
+            if reached:
+                hits.append(f"{p['nickname']} ({fmt_m(val)})")
+
+    if money is not None or sq_lines or w_lines or hits:
+        out.append("")
+        out.append("<b>⭐ Lo tuyo</b>" + (f" · dinero: <b>{fmt_m(money)}</b>" if money is not None else ""))
+        if hits:
+            out.append("🎯 <b>Objetivo alcanzado:</b> " + " · ".join(hits))
+        if sq_lines:
+            out.append("👥 <b>Tu plantilla:</b> " + " · ".join(sq_lines[:10]))
+        if w_lines:
+            out.append("👁 <b>Tus vigilados:</b> " + " · ".join(w_lines[:10]))
+    return out
+
+
 def main():
     meta = load("meta.json", {})
-    lines = ["<b>⚡ Fantasy Studio — resumen del día</b>"]
+    try:
+        now = madrid_now()
+        DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+        MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+                 "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+        hoy = f"{DIAS[now.weekday()].capitalize()} {now.day} de {MESES[now.month - 1]}"
+    except Exception:
+        hoy = ""
+    lines = [f"<b>⚡ Fantasy Studio — {hoy}</b>" if hoy else "<b>⚡ Fantasy Studio — resumen del día</b>"]
     if not values_fresh("2"):
         lines.append("⏳ <i>Ojo: los valores de hoy aún no se habían publicado al enviar esto.</i>")
+
+    lines.extend(personal_section(fetch_personal()))
 
     for comp, label in COMPS:
         week = (meta.get("comps") or {}).get(comp) or {}

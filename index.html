@@ -655,6 +655,58 @@ function persist() {
   localStorage.setItem(LS.moves, JSON.stringify(state.moves));
   localStorage.setItem(LS.watch, JSON.stringify(state.watch));
   localStorage.setItem(LS.favs, JSON.stringify(state.favs));
+  scheduleSync();
+}
+
+/* ---------- nube personal: copia en TU Worker (KV) ----------
+   Guarda plantilla/vigilados/favoritos/dinero bajo una clave secreta aleatoria.
+   Sirve para el resumen personalizado de Telegram y para restaurar en otro
+   dispositivo. La sesión (tokens) NUNCA se sube. */
+function syncKey(){
+  let k = localStorage.getItem("fs_sync_key");
+  if (!k) {
+    k = b64url(crypto.getRandomValues(new Uint8Array(24)));
+    localStorage.setItem("fs_sync_key", k);
+  }
+  return k;
+}
+let _syncTimer = null;
+function scheduleSync(){
+  if (!state.workerUrl) return;
+  clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(pushSync, 4000);
+}
+async function pushSync(){
+  if (!state.workerUrl) return;
+  try {
+    const payload = {
+      v: 1, at: new Date().toISOString(),
+      squad: state.squad, watch: state.watch, favs: state.favs, moves: state.moves,
+      money: { "1": ligaMoney(state.liga.data["1"]?.money), "2": ligaMoney(state.liga.data["2"]?.money) },
+    };
+    await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey(), {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(10000),
+    });
+  } catch(e) { /* sin red: se reintenta en el próximo cambio */ }
+}
+async function pullSync(){
+  if (!state.workerUrl) { toast("Falta el servidor puente", "err"); return; }
+  try {
+    const r = await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey(), { signal: AbortSignal.timeout(10000) });
+    if (r.status === 404) { toast("No hay copia en la nube todavía (se sube sola al usar la app)", "err"); return; }
+    const data = await r.json();
+    if (!data.squad) throw new Error("copia no válida");
+    if (!confirm(`Copia en la nube del ${new Date(data.at).toLocaleString("es-ES")}. ¿Sustituir la plantilla, movimientos, vigilados y favoritos de ESTE dispositivo por los de la nube?`)) return;
+    state.squad = Object.assign({"1":[], "2":[]}, data.squad);
+    state.moves = Object.assign({"1":[], "2":[]}, data.moves || {});
+    state.watch = Object.assign({"1":[], "2":[]}, data.watch || {});
+    state.favs = Object.assign({"1":[], "2":[]}, data.favs || {});
+    persist();
+    closeModal();
+    render();
+    toast("Restaurado desde la nube", "ok");
+  } catch(e) { toast("No se pudo restaurar: " + e.message, "err"); }
 }
 function isFav(pid){ return (state.favs[comp()] || []).includes(String(pid)); }
 function toggleFav(pid){
@@ -1576,11 +1628,46 @@ const RANKS = [
   { id:"assists",label:"Asistencias", needsStats:true },
 ];
 
+/* Mapa valor-vs-puntos: cada punto es un jugador; arriba-izquierda = chollo
+   (muchos puntos, poco precio). Tocar un punto abre su ficha. */
+function scatterHtml(c){
+  const pool = (state.players[c] || []).filter(p => (p.points || 0) > 0 && pVal(p) > 0 && p.playerStatus !== "out_of_league");
+  if (!pool.length) return `<div class="card"><div class="empty-state">Sin datos</div></div>`;
+  const W = 460, H = 320, PL = 40, PB = 28, PT = 12, PR = 12;
+  const maxV = Math.max(...pool.map(pVal)), maxP = Math.max(...pool.map(p => p.points));
+  const x = v => PL + Math.sqrt(v / maxV) * (W - PL - PR); // raíz: despliega la zona barata
+  const y = pts => H - PB - (pts / maxP) * (H - PB - PT);
+  const dots = pool.map(p => {
+    const pos = POS[String(p.positionId)] || POS["3"];
+    const mine = !!squadEntry(p.id);
+    return `<circle cx="${x(pVal(p)).toFixed(1)}" cy="${y(p.points).toFixed(1)}" r="${mine ? 6 : 3.6}"
+      fill="${pos.color}" opacity="${mine ? 1 : 0.62}" ${mine ? 'stroke="var(--text)" stroke-width="1.6"' : ""}
+      style="cursor:pointer" onclick="openPlayer('${p.id}')"><title>${esc(p.nickname)} · ${fmtM(pVal(p))} € · ${p.points} pts</title></circle>`;
+  }).join("");
+  const gridY = [0.25, 0.5, 0.75, 1].map(f => { const yy = y(maxP * f); return `<line x1="${PL}" y1="${yy}" x2="${W-PR}" y2="${yy}" stroke="var(--border)" stroke-width="0.6"/><text x="${PL-5}" y="${yy+3}" text-anchor="end" font-size="8.5" fill="var(--text-3)">${Math.round(maxP*f)}</text>`; }).join("");
+  const gridX = [0.1, 0.35, 1].map(f => { const xx = x(maxV * f); return `<text x="${xx}" y="${H-10}" text-anchor="middle" font-size="8.5" fill="var(--text-3)">${fmtM(maxV*f)}</text>`; }).join("");
+  return `
+  <div class="card" style="padding:12px">
+    <div style="font-size:11px;color:var(--text-3);margin-bottom:8px;line-height:1.5">
+      ⬆️⬅️ <b>Arriba a la izquierda = chollos</b> (muchos puntos, poco precio). Tus jugadores llevan borde. Toca un punto para abrir la ficha.
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+      ${gridY}${gridX}
+      <text x="${PL-28}" y="${(H-PB+PT)/2}" font-size="9" fill="var(--text-3)" transform="rotate(-90 ${PL-28} ${(H-PB+PT)/2})">puntos</text>
+      <text x="${(W+PL)/2}" y="${H-1}" text-anchor="middle" font-size="9" fill="var(--text-3)">valor de mercado</text>
+      ${dots}
+    </svg>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:9px;font-size:10.5px;color:var(--text-3)">
+      ${POS_ORDER.slice(0,4).map(k => `<span><span class="zone-dot" style="background:${POS[k].color}"></span>${POS[k].tag}</span>`).join("")}
+    </div>
+  </div>`;
+}
+
 function viewStats(){
   const c = comp();
   const tab = state.statsTab;
   const chips = `<div class="chips-row no-scrollbar">
-    ${[["clasificacion","Clasificación"],["equipos","Equipos"],["rankings","Rankings"]].map(([id,l]) =>
+    ${[["clasificacion","Clasificación"],["equipos","Equipos"],["rankings","Rankings"],["mapa","🗺 Mapa valor-puntos"]].map(([id,l]) =>
       `<button class="chip ${tab===id?"active":""}" onclick="state.statsTab='${id}';render()">${l}</button>`).join("")}
   </div>`;
 
@@ -1606,6 +1693,8 @@ function viewStats(){
         <span><span class="zone-dot" style="background:var(--red)"></span>Descenso</span>`}
       </div>`;
     }
+  } else if (tab === "mapa") {
+    body = scatterHtml(c);
   } else if (tab === "equipos") {
     const teamIds = [...new Set((state.players[c]||[]).map(p => String(p.teamId)))];
     const rows = teamIds.map(id => {
@@ -1856,14 +1945,112 @@ function openPlayer(pid){
         <button class="btn-ghost" onclick="toggleFav('${p.id}')">${fav ? "⭐ Quitar" : "☆ Favorito"}</button>
         <button class="btn-ghost" onclick="openWatchModal('${p.id}')">${IC.target.replace('class="ic"','class="ic" style="width:14px;height:14px"')} ${isWatched(pid) ? "Objetivo" : "Vigilar"}</button>
       </div>
-      <a class="btn-ghost" style="width:100%;margin-top:9px;text-decoration:none" target="_blank" rel="noopener"
-         href="https://www.sofascore.com/es/search?q=${encodeURIComponent(p.nickname)}">
-         ${IC.ext.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Ver en Sofascore</a>
+      <div style="display:flex;gap:9px;margin-top:9px">
+        <button class="btn-ghost" style="flex:1" onclick="startCompare('${p.id}')">⚖ Comparar</button>
+        <a class="btn-ghost" style="flex:1;text-decoration:none" target="_blank" rel="noopener"
+           href="https://www.sofascore.com/es/search?q=${encodeURIComponent(p.nickname)}">
+           ${IC.ext.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Sofascore</a>
+      </div>
     </div>`);
 }
 function setPdTab(t){
   window._pdTab = t;
   if (window._modalPid) openPlayer(window._modalPid);
+}
+
+/* =====================================================================
+   COMPARADOR DE JUGADORES
+   ===================================================================== */
+function startCompare(pidA){
+  window._cmpA = String(pidA);
+  const c = comp();
+  const a = state.byId[c].get(String(pidA));
+  openModal(`
+    ${modalHead("Comparar con " + esc(a?.nickname || "…"))}
+    <div class="modal-body">
+      <div class="search-box">${IC.search}<input id="cmpSearch" placeholder="Busca al segundo jugador…" autocomplete="off"></div>
+      <div id="cmpList"></div>
+    </div>`, ov => {
+      const inp = ov.querySelector("#cmpSearch");
+      const listEl = ov.querySelector("#cmpList");
+      const norm = s => s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+      const renderList = () => {
+        const q = norm(inp.value || "");
+        let list = (state.players[c] || []).filter(p => String(p.id) !== window._cmpA && (!q || norm(p.nickname).includes(q)));
+        // por defecto, sugiere jugadores de la misma posición y valor parecido
+        if (!q && a) list = list.filter(p => p.positionId === a.positionId).sort((x,y) => Math.abs(pVal(x)-pVal(a)) - Math.abs(pVal(y)-pVal(a)));
+        else list.sort((x,y) => pVal(y) - pVal(x));
+        listEl.innerHTML = `<div class="card">` + list.slice(0, 25).map(p => {
+          const pos = POS[String(p.positionId)] || POS["3"];
+          const t = teamOf(p);
+          return `<div class="p-row" onclick="openCompare('${p.id}')">
+            <img class="p-photo sm" loading="lazy" src="${esc(p.image)}" alt="" onerror="this.style.visibility='hidden'">
+            <div class="p-main"><div class="p-name">${esc(p.nickname)}</div>
+              <div class="p-meta"><span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>${t ? ` ${esc(t.shortName||t.name)}` : ""} · ${fmtM(pVal(p))} € · ${p.points ?? 0} pts</div></div>
+            <div class="picker-add">⚖</div>
+          </div>`;
+        }).join("") + `</div>`;
+      };
+      inp.addEventListener("input", renderList);
+      renderList();
+      setTimeout(() => inp.focus(), 120);
+    });
+}
+
+function openCompare(pidB){
+  const c = comp();
+  const A = state.byId[c].get(String(window._cmpA));
+  const B = state.byId[c].get(String(pidB));
+  if (!A || !B) return;
+  const dA = deltas(c, A.id), dB = deltas(c, B.id);
+  const rivA = rivalDifficulty(c, A.teamId), rivB = rivalDifficulty(c, B.teamId);
+  const rivTxt = r => r && r.rival ? `${r.rival.shortName || r.rival.name} ${r.level === 1 ? "🟢" : r.level === 3 ? "🔴" : "🟡"}` : "—";
+  const stat = (pid, k) => statGet(c, pid, k);
+  const n1 = v => v == null ? "—" : (+v).toLocaleString("es-ES", { maximumFractionDigits: 1 });
+  const isPor = String(A.positionId) === "1" || String(B.positionId) === "1";
+  const rows = [
+    ["Valor", fmtM(pVal(A)) + " €", fmtM(pVal(B)) + " €", pVal(A) - pVal(B)],
+    ["Hoy", fmtMSign(dA.d1), fmtMSign(dB.d1), dA.d1 - dB.d1],
+    ["7 días", fmtMSign(dA.d7), fmtMSign(dB.d7), dA.d7 - dB.d7],
+    ["Puntos", A.points ?? 0, B.points ?? 0, (A.points||0) - (B.points||0)],
+    ["Media", n1(A.averagePoints), n1(B.averagePoints), (A.averagePoints||0) - (B.averagePoints||0)],
+    ["Forma 3j", n1(form3(A)), n1(form3(B)), form3(A) - form3(B)],
+    ["Pts/M€", n1(ppm(A)), n1(ppm(B)), ppm(A) - ppm(B)],
+    ["Próx. rival", rivTxt(rivA), rivTxt(rivB), (rivB?.level ?? 2) - (rivA?.level ?? 2)],
+    ["Minutos", n1(stat(A.id, "mins_played")), n1(stat(B.id, "mins_played")), (stat(A.id,"mins_played")||0) - (stat(B.id,"mins_played")||0)],
+    isPor ? ["Paradas", n1(stat(A.id, "saves")), n1(stat(B.id, "saves")), (stat(A.id,"saves")||0) - (stat(B.id,"saves")||0)]
+          : ["Goles", n1(stat(A.id, "goals")), n1(stat(B.id, "goals")), (stat(A.id,"goals")||0) - (stat(B.id,"goals")||0)],
+    isPor ? ["Encajados", n1(stat(A.id, "goals_conceded")), n1(stat(B.id, "goals_conceded")), (stat(B.id,"goals_conceded")||0) - (stat(A.id,"goals_conceded")||0)]
+          : ["Asistencias", n1(stat(A.id, "goal_assist")), n1(stat(B.id, "goal_assist")), (stat(A.id,"goal_assist")||0) - (stat(B.id,"goal_assist")||0)],
+  ];
+  const head = p => {
+    const pos = POS[String(p.positionId)] || POS["3"];
+    const t = teamOf(p);
+    return `<div style="text-align:center;cursor:pointer" onclick="closeModal();openPlayer('${p.id}')">
+      <img src="${esc(p.image)}" alt="" style="width:64px;height:64px;border-radius:14px;background:var(--card);border:1px solid var(--border);object-fit:cover;object-position:top" onerror="this.style.visibility='hidden'">
+      <div style="font-size:13px;font-weight:800;margin-top:5px">${esc(p.nickname)}</div>
+      <div style="font-size:10.5px;color:var(--text-3)"><span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span> ${t ? esc(t.shortName || t.name) : ""}</div>
+    </div>`;
+  };
+  openModal(`
+    ${modalHead("⚖ Comparador")}
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;margin-bottom:14px">
+        ${head(A)}<div style="font-size:16px;font-weight:800;color:var(--text-3)">VS</div>${head(B)}
+      </div>
+      <div class="card" style="overflow:hidden">
+        ${rows.map(([lbl, va, vb, diff]) => `
+          <div style="display:grid;grid-template-columns:1fr 92px 1fr;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:12.5px;font-variant-numeric:tabular-nums;align-items:center">
+            <div style="text-align:right;font-weight:${diff > 0 ? 800 : 500};color:${diff > 0 ? "var(--green)" : "var(--text-2)"}">${va}</div>
+            <div style="text-align:center;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-3)">${lbl}</div>
+            <div style="text-align:left;font-weight:${diff < 0 ? 800 : 500};color:${diff < 0 ? "var(--green)" : "var(--text-2)"}">${vb}</div>
+          </div>`).join("")}
+      </div>
+      <div style="display:flex;gap:9px;margin-top:12px">
+        <button class="btn-ghost" style="flex:1" onclick="startCompare('${A.id}')">Cambiar 2º</button>
+        <button class="btn-ghost" style="flex:1" onclick="window._cmpA='${B.id}';startCompare('${B.id}')">Comparar otro con ${esc(B.nickname).slice(0,10)}</button>
+      </div>
+    </div>`);
 }
 function miniStat(n, l){ return `<div class="mini-stat"><div class="n">${n}</div><div class="l">${l}</div></div>`; }
 
@@ -2529,6 +2716,7 @@ async function loadLiga(force){
   st.data[c] = out;
   st.errors = errs;
   st.loading = false;
+  scheduleSync(); // sube dinero/plantilla frescos a la nube personal
   if (state.view === "liga") render();
 }
 
@@ -2665,6 +2853,40 @@ function computeBudgets(c){
   if (me && myMoney != null && Math.abs(myMoney - (me.base + me.extra)) > 3000000) incomplete = true;
   return { rows, hasPrizes, incomplete };
 }
+/* foto diaria de los presupuestos (en este dispositivo) para ver quién acumula caja */
+function snapshotBudgets(c, rows){
+  const t = +new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" }).replace(/-/g, "");
+  const all = load("fs_budget_hist", {});
+  const cc = all[c] || (all[c] = {});
+  for (const r of rows) {
+    const arr = cc[r.tid] || (cc[r.tid] = []);
+    if (!arr.length || arr[arr.length - 1][0] < t) arr.push([t, r.budget]);
+    else arr[arr.length - 1][1] = r.budget;
+    if (arr.length > 200) arr.splice(0, arr.length - 200);
+  }
+  try { localStorage.setItem("fs_budget_hist", JSON.stringify(all)); } catch(e){}
+  return cc;
+}
+function seriesDelta7(series){
+  if (!series || series.length < 2) return null;
+  const last = series[series.length - 1];
+  const target = intMinusDays(last[0], 7);
+  let base = series[0];
+  for (const e of series) { if (e[0] <= target) base = e; else break; }
+  return last[1] - base[1];
+}
+function sparkFromSeries(series, w, h){
+  if (!series || series.length < 2) return "";
+  const W = w || 58, H = h || 22, P = 2;
+  const vals = series.map(e => e[1]);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = (max - min) || 1;
+  const step = (W - P*2) / (series.length - 1);
+  const coords = series.map((e,i) => `${(P + i*step).toFixed(1)},${(H - P - ((e[1]-min)/range)*(H-P*2)).toFixed(1)}`).join(" ");
+  const col = vals[vals.length-1] >= vals[0] ? "var(--green)" : "var(--red)";
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:${W}px;height:${H}px" preserveAspectRatio="none"><polyline points="${coords}" fill="none" stroke="${col}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
 /* valor histórico de un jugador en una fecha (para profit de plantillas iniciales) */
 function histValueAt(c, pid, dateInt){
   const h = (state.history[c] || {})[String(pid)];
@@ -2955,7 +3177,7 @@ function viewLiga(){
       ${diagHtml()}`;
   }
 
-  const TABS = [["mercado","Mercado del día"],["pujas","Mis pujas"],["ventas","Mis ventas"],["equipo","Mi equipo"],["rivales","Rivales"],["actividad","Actividad"]];
+  const TABS = [["mercado","Mercado del día"],["pujas","Mis pujas"],["ventas","Mis ventas"],["equipo","Mi equipo"],["once","Once ideal"],["rivales","Rivales"],["actividad","Actividad"]];
   const tabsHtml = `<div class="chips-row no-scrollbar" style="margin-bottom:12px">${TABS.map(([id,l]) =>
     `<button class="chip ${state.ligaTab === id ? "active" : ""}" onclick="state.ligaTab='${id}';render()">${l}</button>`).join("")}</div>`;
 
@@ -2964,6 +3186,7 @@ function viewLiga(){
   else if (state.ligaTab === "pujas") body = ligaTabPujas(c, d);
   else if (state.ligaTab === "ventas") body = ligaTabVentas(c, d);
   else if (state.ligaTab === "equipo") body = ligaTabEquipo(c, d);
+  else if (state.ligaTab === "once") body = ligaTabOnce(c, d);
   else if (state.ligaTab === "rivales") body = ligaTabRivales(c, d);
   else body = ligaTabActividad(c, d);
 
@@ -3080,9 +3303,11 @@ function ligaTabVentas(c, d){
   if (!rows.length) return `<div class="card"><div class="empty-state"><div class="big">🏷️</div>
     No tienes jugadores en venta.<br>
     <span style="font-size:11.5px;color:var(--text-3)">Ponlos a la venta desde la pestaña «Mi equipo».</span></div></div>
-    <button class="btn-ghost" style="width:100%;margin-top:10px" onclick="state.ligaTab='equipo';render()">Ir a Mi equipo ›</button>`;
+    <button class="btn-ghost" style="width:100%;margin-top:10px" onclick="state.ligaTab='equipo';render()">Ir a Mi equipo ›</button>
+    ${offersHtml(c, d)}`;
   return `<div style="font-size:11.5px;color:var(--text-3);margin-bottom:8px">${rows.length} en venta</div>
-  <div class="card">${rows.join("")}</div>`;
+  <div class="card">${rows.join("")}</div>
+  ${offersHtml(c, d)}`;
 }
 
 /* --- pestaña: mi equipo real --- */
@@ -3113,6 +3338,122 @@ function ligaTabEquipo(c, d){
   }).join("")}</div>`;
 }
 
+/* --- pestaña: once ideal para la próxima jornada --- */
+function ligaTabOnce(c, d){
+  const teamPlayers = d.team ? (d.team.players || d.team.playerTeams || []) : [];
+  if (!teamPlayers.length) return `<div class="card"><div class="empty-state"><div class="big">📋</div>No se pudo leer tu equipo</div></div>`;
+  const n1 = v => (+v).toLocaleString("es-ES", { maximumFractionDigits: 1 });
+  const scored = teamPlayers.map(x => {
+    const pm = x.playerMaster || x.player || x;
+    const pid = String(pm.id ?? "");
+    const local = state.byId[c].get(pid);
+    if (!local) return { pm, pid, pos: String(pm.positionId ?? "3"), score: 0, why: "sin datos", ok: true };
+    const riv = rivalDifficulty(c, local.teamId);
+    const okStatus = local.playerStatus === "ok";
+    let score = form3(local) * 2 + (local.averagePoints || 0);
+    if (riv) score += riv.level === 1 ? 1.5 : riv.level === 3 ? -1.5 : 0;
+    if (!okStatus) score = -100;
+    const why = okStatus
+      ? `forma ${n1(form3(local))} · media ${n1(local.averagePoints || 0)}${riv && riv.rival ? ` · vs ${esc(riv.rival.shortName || riv.rival.name)} ${riv.level === 1 ? "🟢" : riv.level === 3 ? "🔴" : "🟡"}` : ""}`
+      : (STATUS[local.playerStatus] || {}).label || "no disponible";
+    return { pm, pid, pos: String(local.positionId), score, why, ok: okStatus, local };
+  });
+  const by = k => scored.filter(s => s.pos === k && s.pos !== "5").sort((a, b) => b.score - a.score);
+  const G = by("1"), D = by("2"), M = by("3"), F = by("4");
+  const FORMS = [[3,4,3],[3,5,2],[4,3,3],[4,4,2],[4,5,1],[5,3,2],[5,4,1]];
+  let best = null;
+  for (const [nd, nm, nf] of FORMS) {
+    if (G.length < 1 || D.length < nd || M.length < nm || F.length < nf) continue;
+    const xi = [G[0], ...D.slice(0, nd), ...M.slice(0, nm), ...F.slice(0, nf)];
+    if (xi.some(s => !s.ok)) { /* se permite, pero penaliza solo */ }
+    const total = xi.reduce((a, s) => a + Math.max(s.score, 0), 0);
+    if (!best || total > best.total) best = { f: [nd, nm, nf], xi, total };
+  }
+  if (!best) return `<div class="card"><div class="empty-state">No hay jugadores suficientes para montar un once (necesitas portero, defensas, medios y delanteros)</div></div>`;
+  const inXI = new Set(best.xi.map(s => s.pid));
+  const bench = scored.filter(s => !inXI.has(s.pid) && s.pos !== "5").sort((a, b) => b.score - a.score);
+  const row = s => ligaPlayerRow(s.pm, `<div class="p-right">
+    <div class="p-val">${s.score > -50 ? n1(Math.max(s.score, 0)) : "—"}</div>
+    <div class="p-sub">${s.why}</div>
+  </div>`);
+  const group = (label, list) => list.length ? `<div class="pl-group-head">${label}</div><div class="card" style="margin-bottom:8px">${list.map(row).join("")}</div>` : "";
+  return `
+  <div class="card" style="padding:13px 15px;margin-bottom:12px;display:flex;align-items:center;gap:12px">
+    <div style="font-family:'Sora',sans-serif;font-size:20px;font-weight:800;color:var(--acc)">${best.f.join("-")}</div>
+    <div style="flex:1;font-size:12px;color:var(--text-2);line-height:1.5">
+      Once sugerido por <b>forma reciente, media y dificultad del próximo rival</b>. Los lesionados/sancionados quedan fuera solos.
+    </div>
+  </div>
+  ${group("Portero", best.xi.slice(0, 1))}
+  ${group("Defensas", best.xi.slice(1, 1 + best.f[0]))}
+  ${group("Centrocampistas", best.xi.slice(1 + best.f[0], 1 + best.f[0] + best.f[1]))}
+  ${group("Delanteros", best.xi.slice(1 + best.f[0] + best.f[1]))}
+  ${bench.length ? group("Banquillo", bench) : ""}
+  <div style="font-size:11px;color:var(--text-3);margin-top:10px">La alineación se cambia en la app oficial; esto es la recomendación de Fantasy Studio.</div>`;
+}
+
+/* --- ofertas recibidas por mis jugadores --- */
+async function scanOffers(){
+  const c = comp();
+  const d = state.liga.data[c];
+  const sel = state.myLeague[c];
+  const teamPlayers = d?.team ? (d.team.players || d.team.playerTeams || []) : [];
+  if (!teamPlayers.length || !sel) { toast("Primero carga Mi equipo", "err"); return; }
+  toast("Buscando ofertas por tus " + teamPlayers.length + " jugadores…");
+  const found = [];
+  for (const x of teamPlayers) {
+    const pm = x.playerMaster || x.player || x;
+    const ptId = (x.playerMaster || x.player) ? (x.id ?? x.playerTeamId) : (x.playerTeamId ?? null);
+    if (ptId == null) continue;
+    try {
+      const raw = await authFetch(`/api/v1/competition/${c}/league/${sel.leagueId}/playerTeam/${ptId}/offer?x-lang=es`);
+      const offers = unwrapList(raw).length ? unwrapList(raw) : (raw && raw.id != null ? [raw] : []);
+      for (const off of offers) found.push({ pm, off, raw });
+    } catch(e) { /* 404 = sin oferta para ese jugador */ }
+  }
+  d.offers = found;
+  render();
+  toast(found.length ? found.length + (found.length === 1 ? " oferta encontrada" : " ofertas encontradas") : "Nadie ha hecho ofertas por tus jugadores", found.length ? "ok" : undefined);
+}
+function offersHtml(c, d){
+  if (!d.offers) return `<button class="btn-ghost" style="width:100%;margin-top:12px" onclick="scanOffers()">🔎 Buscar ofertas recibidas de rivales</button>`;
+  if (!d.offers.length) return `<div style="font-size:11.5px;color:var(--text-3);margin-top:12px;text-align:center">Sin ofertas de rivales ahora mismo · <button style="color:var(--acc)" onclick="scanOffers()">volver a buscar</button></div>`;
+  return `<div class="section-title" style="margin-top:16px">📩 Ofertas recibidas</div>
+  <div class="card">${d.offers.map(({ pm, off }, i) => {
+    const money = off.money ?? off.offerMoney ?? off.amount ?? null;
+    const from = off.team?.manager?.managerName || off.buyerTeam?.manager?.managerName || "un rival";
+    const marketId = off.marketId ?? off.market?.id ?? null;
+    const canAct = marketId != null && off.id != null;
+    return ligaPlayerRow(pm, `<div class="p-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
+      <div><span class="p-val up">${money != null ? fmtM(+money) + " €" : "—"}</span>
+        <div class="p-sub">de ${esc(from)}</div></div>
+      ${canAct ? `<div style="display:flex;gap:6px">
+        <button class="btn-acc" style="padding:6px 11px;font-size:11.5px" onclick="event.stopPropagation();acceptOfferUI(${i})">Aceptar</button>
+        <button class="btn-ghost btn-danger" style="padding:6px 11px;font-size:11.5px" onclick="event.stopPropagation();rejectOfferUI(${i})">Rechazar</button>
+      </div>` : `<span style="font-size:10px;color:var(--text-3)">gestiónala en la app oficial</span>`}
+    </div>`);
+  }).join("")}</div>`;
+}
+function acceptOfferUI(i){
+  const c = comp();
+  const { pm, off } = state.liga.data[c].offers[i];
+  const money = +(off.money ?? off.offerMoney ?? off.amount ?? 0);
+  if (!confirm(`⚠️ ¿ACEPTAR la oferta de ${fmt(money)} por ${pm.nickname}? Se venderá en tu liga REAL y no se puede deshacer.`)) return;
+  const L = state.myLeague[c].leagueId;
+  const marketId = off.marketId ?? off.market?.id;
+  ligaAction("Oferta aceptada — vendido", () =>
+    authFetch(`/api/v1/competition/${c}/league/${L}/market/${marketId}/offer/${off.id}/accept?x-lang=es`, { method: "POST", body: { offerMoney: money } }));
+}
+function rejectOfferUI(i){
+  const c = comp();
+  const { pm, off } = state.liga.data[c].offers[i];
+  if (!confirm(`¿Rechazar la oferta por ${pm.nickname}?`)) return;
+  const L = state.myLeague[c].leagueId;
+  const marketId = off.marketId ?? off.market?.id;
+  ligaAction("Oferta rechazada", () =>
+    authFetch(`/api/v1/competition/${c}/league/${L}/market/${marketId}/offer/${off.id}/reject?x-lang=es`, { method: "POST" }));
+}
+
 /* --- pestaña: rivales (presupuestos, equipos y profit) --- */
 function ligaTabRivales(c, d){
   const act = state.actFull[c];
@@ -3124,6 +3465,15 @@ function ligaTabRivales(c, d){
   }
   const B = computeBudgets(c);
   if (!B) return `<div class="card"><div class="empty-state">Sin datos de clasificación todavía</div></div>`;
+  const bh = snapshotBudgets(c, B.rows);
+  const hoarders = B.rows
+    .map(r => ({ r, d7: seriesDelta7(bh[r.tid]) }))
+    .filter(x => x.d7 != null && x.d7 > 500000 && !x.r.isMe)
+    .sort((a, b) => b.d7 - a.d7)
+    .slice(0, 3);
+  const hoardHtml = hoarders.length ? `<div class="card" style="padding:11px 14px;margin-bottom:10px;font-size:12px;color:var(--text-2)">
+    💰 <b>Acumulando caja esta semana:</b> ${hoarders.map(x => `${esc(x.r.manager || x.r.name)} <b class="up">+${fmtM(x.d7)}</b>`).join(" · ")}
+    <span style="color:var(--text-3)"> — ojo, pujarán fuerte pronto.</span></div>` : "";
   const pmap = purchaseMap(c);
   const dates = act.items.map(a => { const dt = parseAct(a).date; return dt ? +String(dt).slice(0,10).replace(/-/g,"") : null; }).filter(Boolean);
   const startInt = dates.length ? Math.min(...dates) : null;
@@ -3133,6 +3483,7 @@ function ligaTabRivales(c, d){
     Presupuesto: 100M iniciales + ventas − compras + ${B.hasPrizes ? "<b>premios de jornada reales</b> (del historial de la liga)" : "<b>100.000 € por punto</b> (estimado)"}. Tu fila usa tu dinero real.
     ${B.incomplete ? `<br><span style="color:var(--orange)">⚠ La fórmula no cuadra con tu dinero real: el historial visible quizá no cubre toda la liga. Tómalo como aproximación.</span>` : ""}
   </div>
+  ${hoardHtml}
   ${B.rows.map(r => {
     const open = state.rivalOpen === r.tid;
     const team = (state.rivalTeams[c] || {})[r.tid];
@@ -3173,8 +3524,9 @@ function ligaTabRivales(c, d){
         </div>
         <div style="text-align:right">
           <div style="font-size:13.5px;font-weight:800;color:var(--acc);font-variant-numeric:tabular-nums">${fmtM(r.budget)} €</div>
-          <div style="font-size:10px;color:var(--text-3)">presupuesto est.</div>
+          <div style="font-size:10px;color:var(--text-3)">${(() => { const d7 = seriesDelta7(bh[r.tid]); return d7 != null && Math.abs(d7) > 100000 ? `<span class="${cls(d7)}">${fmtMSign(d7)} · 7d</span>` : "presupuesto"; })()}</div>
         </div>
+        ${sparkFromSeries(bh[r.tid], 44, 18)}
         <span style="color:var(--text-3);display:inline-block;transform:rotate(${open ? 90 : 0}deg);transition:transform .15s">›</span>
       </div>
       ${bodyHtml}
@@ -3385,10 +3737,25 @@ function openMenu(){
           Y ya está: el resumen llega cada mañana. El token solo lo ve GitHub Actions.
         </div>
       </details>
+      <details class="card" style="padding:0;margin-bottom:9px">
+        <summary style="padding:12px 15px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-2);list-style:none">☁️ Nube personal y Telegram a medida</summary>
+        <div style="padding:0 15px 14px;font-size:12px;color:var(--text-2);line-height:1.65">
+          Tu plantilla, vigilados y favoritos se copian solos (cifrados en tránsito) a TU Worker bajo esta clave secreta:<br>
+          <code style="display:block;background:var(--card-2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin:8px 0;font-size:11px;word-break:break-all" id="syncKeyShow"></code>
+          <button class="btn-ghost" style="width:100%;margin-bottom:8px" onclick="navigator.clipboard.writeText(syncKey()).then(()=>toast('Clave copiada','ok'))">Copiar clave</button>
+          <button class="btn-ghost" style="width:100%;margin-bottom:10px" onclick="pullSync()">Restaurar en este dispositivo desde la nube</button>
+          Para que el <b>resumen de Telegram</b> incluya TUS vigilados, plantilla y dinero: pega la clave en
+          <a href="https://github.com/manugrraa/fantasy-studio/settings/secrets/actions/new" target="_blank" rel="noopener" style="color:var(--acc)">este formulario</a>
+          con Name <b>FANTASY_SYNC_KEY</b>. Un solo paso, una vez.
+        </div>
+      </details>
       <button class="btn-acc" style="width:100%" onclick="exportData()">Exportar mis datos</button>
       <button class="btn-ghost" style="width:100%;margin-top:9px" onclick="document.getElementById('importFile').click()">Importar datos</button>
       <button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" onclick="wipeData()">Borrar todos mis datos</button>
-    </div>`);
+    </div>`, ov => {
+      const k = ov.querySelector("#syncKeyShow");
+      if (k) k.textContent = syncKey();
+    });
 }
 function exportData(){
   const payload = {
