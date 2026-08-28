@@ -2991,7 +2991,7 @@ function squadRow(e){
       </div>
       <div class="p-meta">
         ${t ? `<img src="${esc(t.badgeColor)}" alt="" loading="lazy"> ${esc(t.shortName||t.name)} · ` : ""}
-        compra ${fmtM(e.buyPrice||0)}${e.buyDate ? " · " + fmtDate(e.buyDate) : ""}
+        ${e.draft ? "de inicio" : "compra"} ${fmtM(e.buyPrice||0)}${e.buyDate ? " · " + fmtDate(e.buyDate) : ""}
       </div>
     </div>
     <div class="p-right">
@@ -3477,7 +3477,7 @@ async function loadFullActivity(c, force){
   st.loading = false;
   if (state.view === "liga") render();
   // importa en silencio MIS operaciones nuevas (precio y fecha reales)
-  if (st.done) syncRealMoves(true);
+  if (st.done) syncRealMoves(true).then(() => syncDraftPlayers(c));
 }
 
 /* Esquema REAL de la actividad (visto en LaLigaApp): activityTypeId
@@ -3936,6 +3936,57 @@ async function syncRealMoves(auto){
   render();
   vibrate(14);
   toast((auto ? "🔄 Tu liga trajo " + news.length + (news.length === 1 ? " operación: " : " operaciones: ") : news.length + " movimientos importados: ") + resumen.slice(0, 2).join(" · ") + (resumen.length > 2 ? " …" : ""), "ok");
+}
+
+/* plantilla inicial: los jugadores que vinieron CON el equipo (sin compra en el
+   historial) valen lo que valían el día del alta en la liga, con esa fecha */
+function syncDraftPlayers(c){
+  const d = state.liga.data[c];
+  const act = state.actFull[c];
+  if (!state.auth || !d?.team || !act?.done) return;
+  const myId = String(state.myLeague[c]?.teamId || "");
+  const maps = managerMaps(c);
+
+  // día en que me dieron el equipo: mi alta en la liga (tipo 9); si no consta,
+  // el registro más antiguo del historial
+  let joinDate = null;
+  for (const raw of act.items) {
+    const a = parseAct(raw);
+    if (a.type === 9 && actTeam(a, maps, 1) === myId && a.date) joinDate = String(a.date).slice(0, 10);
+  }
+  if (!joinDate) {
+    const dates = act.items.map(r => parseAct(r).date).filter(Boolean).map(x => String(x).slice(0, 10)).sort();
+    if (!dates.length) return;
+    joinDate = dates[0];
+  }
+  const joinInt = +joinDate.replace(/-/g, "");
+
+  const pmap = purchaseMap(c);
+  const fixed = [];
+  for (const x of (d.team.players || d.team.playerTeams || [])) {
+    const pm = x.playerMaster || x.player || x;
+    const pid = String(pm.id ?? "");
+    if (!pid || pmap[myId + ":" + pid] != null) continue; // ese sí lo compraste: precio real ya asignado
+    const local = state.byId[c].get(pid);
+    if (!local) continue;
+    const v0 = histValueAt(c, pid, joinInt) ?? pVal(local);
+    const entry = squadEntry(pid);
+    if (entry) {
+      if (entry.draft) continue; // ya ajustado
+      entry.buyPrice = v0;
+      entry.buyDate = joinDate;
+      entry.draft = true;
+      fixed.push(local.nickname);
+    } else {
+      state.squad[c].push({ id: uid(), pid, name: local.nickname, pos: String(local.positionId), teamId: String(local.teamId), buyPrice: v0, buyDate: joinDate, custom: false, draft: true, imported: true });
+      fixed.push(local.nickname);
+    }
+  }
+  if (fixed.length) {
+    persist();
+    render();
+    toast("🎁 Plantilla inicial con su valor de origen (" + joinDate.split("-").reverse().slice(0, 2).join("/") + "): " + fixed.slice(0, 3).join(", ") + (fixed.length > 3 ? " +" + (fixed.length - 3) : ""), "ok");
+  }
 }
 
 function ligaPlayerRow(pm, right){
