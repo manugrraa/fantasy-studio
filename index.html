@@ -407,6 +407,20 @@
   .mv-icon.buy { background: rgba(248,113,113,0.1); color: var(--red); }
   .mv-icon.sell { background: rgba(74,222,128,0.1); color: var(--green); }
   .month-lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--text-3); margin: 16px 0 8px; }
+
+  /* tarjeta del mercado del día */
+  .mk-card { padding: 0; margin-bottom: 10px; overflow: hidden; }
+  .mk-top { display: flex; gap: 12px; padding: 13px 14px 11px; align-items: center; cursor: pointer; }
+  .mk-photo { width: 58px; height: 58px; border-radius: 14px; background: var(--card-2); border: 1px solid var(--border); object-fit: cover; object-position: top; flex-shrink: 0; }
+  .mk-name { font-family: 'Sora', sans-serif; font-size: 15.5px; font-weight: 800; letter-spacing: -0.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mk-price { font-family: 'Sora', sans-serif; font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .mk-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 7px; padding: 0 14px 11px; }
+  .mk-fact { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 7px 6px; text-align: center; min-width: 0; }
+  .mk-fact .n { font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mk-fact .l { font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--text-3); margin-top: 2px; }
+  .mk-actions { display: flex; gap: 8px; padding: 0 14px 13px; }
+  .mk-actions > * { flex: 1; }
+  .mk-bidders { padding: 0 14px 13px; font-size: 11px; color: var(--text-3); line-height: 2; }
   .month-lbl:first-child { margin-top: 0; }
 
   /* partidos */
@@ -509,7 +523,7 @@
   .trend-ico.up { color: var(--green); background: rgba(74,222,128,.14); }
   .trend-ico.down { color: var(--red); background: rgba(248,113,113,.14); }
   .trend-ico.flat { color: var(--text-3); background: var(--card-2); }
-  .delta-pill { display: inline-block; font-size: 10.5px; font-weight: 800; padding: 2px 7px; border-radius: 7px; font-variant-numeric: tabular-nums; }
+  .delta-pill { display: inline-block; font-size: 10.5px; font-weight: 800; padding: 2px 7px; border-radius: 7px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .delta-pill.up { color: var(--green); background: rgba(74,222,128,.12); }
   .delta-pill.down { color: var(--red); background: rgba(248,113,113,.12); }
   .delta-pill.flat { color: var(--text-3); background: var(--card-2); }
@@ -4301,38 +4315,76 @@ function ligaTabMercado(c, d){
   if (!act || (!act.done && !act.loading)) setTimeout(() => loadFullActivity(c), 30);
   const biddersReady = !!(act && act.done);
   return `${!biddersReady ? `<div style="font-size:11px;color:var(--text-3);margin-bottom:8px">Analizando el historial para estimar posibles pujadores…</div>` : ""}
-  <div class="card">${market.map((it, idx) => {
+  ${market.map((it, idx) => {
     const pm = it.playerMaster || it.player || it;
     const pid = String(pm.id ?? "");
+    const local = state.byId[c].get(pid);
+    const name = pm.nickname || pm.name || local?.nickname || "Jugador";
+    const img = pm.images?.transparent?.["256x256"] || pm.image || local?.image || "";
+    const pos = POS[String(pm.positionId ?? local?.positionId ?? "3")] || POS["3"];
+    const t = local ? teamOf(local) : null;
+    const dd = local ? deltas(c, pid) : null;
     const price = it.salePrice ?? it.price ?? pm.marketValue ?? 0;
     const bids = it.numberOfBids ?? it.bids ?? null;
+    const myBid = it.bid || it.myBid || null;
     const sellerName = it.sellerTeam?.manager?.managerName || it.sellerTeam?.name || null;
     const mine = state.myLeague[c]?.teamId && it.sellerTeam?.id != null && String(it.sellerTeam.id) === String(state.myLeague[c].teamId);
     const exp = it.expirationDate || it.expiration || null;
-    const btn = mine
-      ? `<button class="btn-ghost btn-danger" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();withdrawFromMarket('${esc(String(it.id))}','${esc(pm.nickname || "jugador")}')">Retirar</button>`
-      : `<button class="btn-acc" style="padding:7px 13px;font-size:12px" onclick="event.stopPropagation();bidFromMarket(${idx})">Pujar</button>`;
-    // posibles pujadores: rivales a los que les llega el dinero para este precio
-    let biddersHtml = "";
-    if (biddersReady && bids != null && bids > 0) {
-      const cands = possibleBidders(c, +price, it.sellerTeam?.id);
-      if (cands) biddersHtml = `<div style="padding:0 12px 10px 62px;font-size:11px;color:var(--text-3);line-height:1.6">
-        ${cands.length
-          ? `🎯 Posibles pujadores: ` + cands.slice(0, 4).map(r => `<span class="badge" style="font-size:10px;padding:2px 7px">${esc(r.manager || r.name)} · hasta ${fmtM(r.maxBid)}</span>`).join(" ") + (cands.length > 4 ? ` +${cands.length - 4}` : "")
-          : `🎯 A ningún rival le llega el dinero para este precio`}
-      </div>`;
-    }
     // ganga: sale por debajo de su valor de mercado (dinero gratis si nadie puja)
-    const localP = state.byId[c].get(pid);
-    const mv = localP ? pVal(localP) : (pm.marketValue != null ? +pm.marketValue : null);
+    const mv = local ? pVal(local) : (pm.marketValue != null ? +pm.marketValue : null);
     const discount = mv && +price < mv ? mv - +price : 0;
-    const gangaHtml = discount >= mv * 0.03 ? `<span class="badge green" style="font-size:9.5px;padding:2px 7px">💸 GANGA −${fmtM(discount)}</span>` : "";
-    return ligaPlayerRow(pm, `<div class="p-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
-      <div style="display:flex;align-items:center;gap:6px">${gangaHtml}<span class="p-val">${fmtM(+price)} €</span></div>
-      <div class="p-sub">${bids != null ? bids + (bids === 1 ? " puja" : " pujas") : ""}${sellerName ? " · " + esc(sellerName) : ""}${exp ? " · hasta " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}${mv ? " · vale " + fmtM(mv) : ""}</div>
-      ${btn}
-    </div>`, { trend: true }) + biddersHtml;
-  }).join("")}</div>`;
+    const ganga = discount >= mv * 0.03;
+    // posibles pujadores: plegados; solo se calculan al abrir
+    const key = String(it.id ?? idx);
+    const open = !!window._mkBidOpen?.has(key);
+    let biddersHtml = "";
+    if (open && biddersReady) {
+      const cands = possibleBidders(c, +price, it.sellerTeam?.id) || [];
+      biddersHtml = `<div class="mk-bidders">${cands.length
+        ? `A estos rivales les llega el dinero:<br>` + cands.map(r => `<span class="badge" style="font-size:10px;padding:2px 7px">${esc(r.manager || r.name)} · hasta ${fmtM(r.maxBid)}</span>`).join(" ")
+        : `A ningún rival le llega el dinero para este precio.`}</div>`;
+    }
+    const btn = mine
+      ? `<button class="btn-ghost btn-danger" style="padding:8px 11px;font-size:12px" onclick="event.stopPropagation();withdrawFromMarket('${esc(String(it.id))}','${esc(pm.nickname || "jugador")}')">Retirar</button>`
+      : `<button class="btn-acc" style="padding:8px 13px;font-size:12px" onclick="event.stopPropagation();bidFromMarket(${idx})">${myBid ? "Mi puja · " + fmtM(+(myBid.money ?? 0)) : "Pujar"}</button>`;
+    return `<div class="card mk-card">
+      <div class="mk-top" ${local ? `onclick="openPlayer('${pid}')"` : ""}>
+        <img class="mk-photo" loading="lazy" src="${esc(img)}" alt="" onerror="this.style.visibility='hidden'">
+        <div style="flex:1;min-width:0">
+          <div class="mk-name">${esc(name)}</div>
+          <div class="p-meta" style="margin-top:3px"><span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
+            ${t ? `<img src="${esc(t.badgeColor)}" alt="" loading="lazy"> ${esc(t.shortName || t.name)}` : ""}${local ? ` · ${local.points ?? 0} pts` : ""}</div>
+          ${dd ? `<div class="p-meta" style="margin-top:5px">
+            <span class="delta-pill ${cls(dd.d1)}">${dd.d1 ? fmtMSign(dd.d1) : "="} hoy</span>
+            <span class="delta-pill ${cls(dd.d7)}">${fmtMSign(dd.d7)} · 7d</span></div>` : ""}
+        </div>
+        <div style="text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+          ${local ? miniSpark(c, pid, 30) : ""}
+          <div class="mk-price">${fmtM(+price)} €</div>
+          ${ganga ? `<span class="badge green" style="font-size:9.5px;padding:2px 7px">💸 GANGA −${fmtM(discount)}</span>` : ""}
+          <div style="font-size:10px;color:var(--text-3);max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sellerName ? "vende " + esc(sellerName) : "precio de salida"}</div>
+        </div>
+      </div>
+      <div class="mk-facts">
+        <div class="mk-fact"><div class="n">${mv != null ? fmtM(mv) + " €" : "—"}</div><div class="l">Vale</div></div>
+        <div class="mk-fact"><div class="n">${bids != null ? bids : "—"}</div><div class="l">${bids === 1 ? "Puja" : "Pujas"}</div></div>
+        <div class="mk-fact"><div class="n">${exp ? new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : "—"}</div><div class="l">Hasta</div></div>
+      </div>
+      <div class="mk-actions">
+        ${btn}
+        ${biddersReady ? `<button class="btn-ghost" style="padding:8px 11px;font-size:12px" onclick="toggleBidders(event,'${esc(key)}')">🎯 Pujadores ${open ? "▴" : "▾"}</button>` : ""}
+      </div>
+      ${biddersHtml}
+    </div>`;
+  }).join("")}`;
+}
+
+/* pliega/despliega los posibles pujadores de un jugador del mercado */
+function toggleBidders(ev, key){
+  ev.stopPropagation();
+  const s = window._mkBidOpen || (window._mkBidOpen = new Set());
+  s.has(key) ? s.delete(key) : s.add(key);
+  render();
 }
 
 /* abre el modal de puja leyendo el item del mercado por índice (evita
