@@ -3370,7 +3370,16 @@ async function loadLiga(force){
     }
 
     await step("market", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/league/${sel.leagueId}/market?x-lang=es`)));
+    const prevFirstAct = st.data[c] ? String(unwrapList(st.data[c].activity)[0]?.id ?? "") : null;
     await step("activity", () => authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/activity/0?x-lang=es`));
+    // si hay operaciones nuevas en la liga (compras/ventas/cláusulas), las
+    // plantillas cacheadas quedan viejas: se invalidan y se recargan solas
+    const newFirstAct = String(unwrapList(out.activity)[0]?.id ?? "");
+    if (prevFirstAct != null && newFirstAct && prevFirstAct !== newFirstAct) {
+      state.rivalTeams[c] = {};
+      state.actFull[c] = null;
+      toast("Operaciones nuevas en tu liga: plantillas actualizadas", "ok");
+    }
     if (sel.teamId) {
       await step("money", () => authFetch(`/api/v1/competition/${c}/teams/${sel.teamId}/money?x-lang=es`));
       await step("team", () => authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/teams/${sel.teamId}?x-lang=es`));
@@ -3419,6 +3428,17 @@ function wealthCard(c){
     ${sparkline(arr.map(e => [e[0], e[1]]), 0)}
     <div style="font-size:10.5px;color:var(--text-3);margin-top:5px">dinero ${fmtM(last[2])} + equipo ${fmtM(last[3])} · se anota solo cada día que abres Mi Liga</div>
   </div>`;
+}
+
+/* recarga TOTAL de la liga: datos + historial + todas las plantillas */
+async function refreshLigaTotal(){
+  const c = comp();
+  state.rivalTeams[c] = {};
+  state.actFull[c] = null;
+  if (state.serpent) state.serpent[c] = null;
+  if (state.liga.data[c]) state.liga.data[c].offers = undefined;
+  await loadLiga(true);
+  toast("Liga y plantillas actualizadas", "ok");
 }
 
 function ligaMoney(m){
@@ -4003,7 +4023,7 @@ function viewLiga(){
       <div style="font-size:14px;font-weight:700">${esc(myName)}</div>
       <div style="font-size:11.5px;color:var(--text-3)">${sel ? esc(sel.name) : "Sin liga en esta competición"}${money != null ? ` · <b style="color:var(--acc)">${fmtM(money)} €</b>` : ""}</div>
     </div>
-    <button class="icon-btn" onclick="loadLiga(true)" title="Recargar">${state.liga.loading ? IC.refresh.replace('class="ic"','class="ic spinning"') : IC.refresh}</button>
+    <button class="icon-btn" onclick="refreshLigaTotal()" title="Actualizar liga y plantillas">${state.liga.loading ? IC.refresh.replace('class="ic"','class="ic spinning"') : IC.refresh}</button>
     <button class="btn-ghost" style="padding:8px 12px;font-size:12px" onclick="fantasyLogout()">Salir</button>
   </div>
   ${leagues.length > 1 ? `<div class="chips-row no-scrollbar">${leagues.map(l =>
@@ -5077,6 +5097,9 @@ async function autoCheck(){
       render();
       checkTargets();
       updateBadge();
+      // con sesión iniciada, repesca también la liga (mercado, dinero, actividad;
+      // y si hay operaciones nuevas, las plantillas se invalidan solas)
+      if (state.auth && state.myLeague[comp()]) loadLiga(true);
       toast("Datos actualizados automáticamente", "ok");
     }
   } catch(e) { /* sin red: lo intentamos más tarde */ }
