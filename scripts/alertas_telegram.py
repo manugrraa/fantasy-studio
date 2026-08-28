@@ -28,6 +28,77 @@ def api_get(path):
         return json.load(r)
 
 
+def match_end_alerts(personal, meta, state):
+    """🏁 Cuando acaba un partido con jugadores MÍOS: sus puntos finales y el
+    total acumulado de mi jornada. Un aviso por partido (state['fin'])."""
+    alerts = []
+    fin = state.setdefault("fin", {})
+    for comp in ("2", "1"):
+        week = (meta.get("comps") or {}).get(comp) or {}
+        wn = week.get("weekNumber")
+        if not wn:
+            continue
+        cal = (load(f"calendar_full_{comp}.json", {}).get("weeks") or {}).get(str(wn)) or []
+        if not cal:
+            continue
+        players = {str(p["id"]): p for p in load(f"players_{comp}.json", [])}
+        teams = {str(t["id"]): t for t in load("teams.json", [])}
+
+        def wpts(pid):
+            p = players.get(str(pid))
+            if not p:
+                return None
+            for w in p.get("weekPoints") or []:
+                if w.get("weekNumber") == wn:
+                    return w.get("points") or 0
+            return None
+
+        # mis jugadores (plantilla + once, sin duplicar) agrupados por equipo real
+        pids = []
+        for e in (personal.get("squad") or {}).get(comp) or []:
+            if e.get("pid") and not e.get("custom"):
+                pids.append(str(e["pid"]))
+        lineup = [str(x) for x in (((personal.get("lineup") or {}).get(comp) or {}).get("ids") or [])]
+        for pid in lineup:
+            if pid not in pids:
+                pids.append(pid)
+        if not pids:
+            continue
+        mine_by_team = {}
+        for pid in pids:
+            p = players.get(pid)
+            if p:
+                mine_by_team.setdefault(str(p["teamId"]), []).append(p)
+
+        # total de mi jornada hasta ahora (el once si lo hay; si no, toda la plantilla)
+        base = lineup or pids
+        total = sum(wpts(pid) or 0 for pid in base)
+
+        for m in cal:
+            if m.get("localScore") is None or m.get("visitorScore") is None:
+                continue
+            mid = f"{comp}:{wn}:{m.get('id')}"
+            if fin.get(mid):
+                continue
+            lid, vid = str(m.get("localId")), str(m.get("visitorId"))
+            involved = (mine_by_team.get(lid) or []) + (mine_by_team.get(vid) or [])
+            fin[mid] = 1
+            if not involved:
+                continue
+            ln = teams.get(lid, {}).get("shortName") or teams.get(lid, {}).get("name") or "?"
+            vn = teams.get(vid, {}).get("shortName") or teams.get(vid, {}).get("name") or "?"
+            partes = []
+            for p in involved:
+                pts = wpts(p["id"])
+                partes.append(f"{p['nickname']} <b>{pts if pts is not None else '—'} pts</b>")
+            alerts.append(
+                f"🏁 Final {ln} {m['localScore']}-{m['visitorScore']} {vn}\n"
+                + " · ".join(partes)
+                + f"\n📊 Llevas <b>{total} pts</b> en la J{wn} (+{fmt_m(total * 100000)} de premio)"
+            )
+    return alerts
+
+
 def live_goal_alerts(personal, meta, state):
     """⚽/🅰️ En jornada en vivo: goles y asistencias de MIS jugadores al momento.
 
@@ -136,6 +207,8 @@ def main():
     # goles y asistencias en vivo de mis jugadores
     meta = load("meta.json", {})
     alerts.extend(live_goal_alerts(personal, meta, state))
+    # finales de partido con jugadores míos
+    alerts.extend(match_end_alerts(personal, meta, state))
 
     for comp in ("2", "1"):
         players = {str(p["id"]): p for p in load(f"players_{comp}.json", [])}
