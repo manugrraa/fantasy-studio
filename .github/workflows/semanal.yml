@@ -1,0 +1,24 @@
+name: Balance semanal
+
+on:
+  schedule:
+    # Domingo 20:30 España (verano)
+    - cron: "30 18 * * 0"
+  workflow_dispatch:
+
+jobs:
+  semanal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Enviar balance semanal
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FANTASY_SYNC_KEY: ${{ secrets.FANTASY_SYNC_KEY }}
+        run: python scripts/semanal_telegram.py

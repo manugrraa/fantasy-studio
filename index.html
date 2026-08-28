@@ -697,6 +697,7 @@ async function pushSync(){
       v: 1, at: new Date().toISOString(),
       squad: state.squad, watch: state.watch, favs: state.favs, moves: state.moves,
       money: { "1": ligaMoney(state.liga.data["1"]?.money), "2": ligaMoney(state.liga.data["2"]?.money) },
+      wealth: load("fs_wealth_hist", {}), // para el resumen semanal de Telegram
     };
     await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey(), {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -768,7 +769,7 @@ async function fetchJSON(url){
 }
 
 async function loadAll(){
-  const [meta, teams, p1, p2, h1, h2, c1, c2, f1, f2, s1, s2] = await Promise.all([
+  const [meta, teams, p1, p2, h1, h2, c1, c2, f1, f2, s1, s2, sl1, sl2] = await Promise.all([
     fetchJSON("data/meta.json"),
     fetchJSON("data/teams.json"),
     fetchJSON("data/players_1.json"),
@@ -781,6 +782,8 @@ async function loadAll(){
     fetchJSON("data/calendar_full_2.json").catch(()=> null),
     fetchJSON("data/stats_1.json").catch(()=> null),
     fetchJSON("data/stats_2.json").catch(()=> null),
+    fetchJSON("data/status_log_1.json").catch(()=> ({})),
+    fetchJSON("data/status_log_2.json").catch(()=> ({})),
   ]);
   state.meta = meta;
   state.teams = new Map(teams.map(t => [String(t.id), t]));
@@ -789,6 +792,7 @@ async function loadAll(){
   state.calendar = { "1": c1, "2": c2 };
   state.calFull = { "1": f1, "2": f2 };
   state.stats = { "1": s1, "2": s2 };
+  state.statusLog = { "1": sl1, "2": sl2 };
   // caché en vivo previa (de "Actualizar ahora") si es más reciente que los datos publicados
   const cache = load(LS.cache, null);
   if (cache && cache.at && state.meta.updatedAt && new Date(cache.at) > new Date(state.meta.updatedAt)) {
@@ -1250,7 +1254,9 @@ function viewResumen(){
     <button class="card clickable" onclick="setView('calendario')"><div class="qi">📅</div>Calendario</button>
   </div>
   ${wealthCard(c)}
-  <div class="section-title">Mi economía</div>
+  <div class="section-title">Mi economía
+    <button style="margin-left:auto;color:var(--acc);font-size:11.5px;font-weight:700" onclick="shareTeamImage()">🖼 Compartir tarjeta ›</button>
+  </div>
   <div class="stat-grid">
     ${statTile("Valor plantilla", fmtM(st.current) + " €", st.n + (st.n===1?" jugador":" jugadores"))}
     ${statTile("Invertido", fmtM(st.invested) + " €", "coste de compra")}
@@ -1469,6 +1475,43 @@ function setF(k, v){
 /* =====================================================================
    VISTA: CONSEJOS
    ===================================================================== */
+/* detector de minutos: ¿está perdiendo la titularidad? (minutos por jornada
+   del volcado diario de estadísticas) */
+function minutesAlert(c, pid){
+  const mins = state.stats[c]?.mins?.[String(pid)];
+  if (!mins) return null;
+  const lastW = state.meta?.comps?.[c]?.previousWeek ?? ((state.meta?.comps?.[c]?.weekNumber || 1) - 1);
+  if (!lastW || lastW < 2) return null;
+  const weeks = Object.keys(mins).map(Number);
+  const playedBefore = weeks.filter(w => w < lastW).length;
+  if (!playedBefore) return null; // nunca fue titular: no hay pérdida que detectar
+  const mLast = mins[String(lastW)];
+  const mPrev = mins[String(lastW - 1)];
+  if (mLast == null) return { sev: 2, txt: `no jugó la J${lastW}` };
+  if (mLast < 30 && (mPrev == null || mPrev < 45)) return { sev: 1, txt: `solo ${mLast}' en la J${lastW}` };
+  return null;
+}
+
+/* radar de regresos: vuelven de lesión/sanción con el valor aún hundido */
+function comebackRadar(c){
+  const log = state.statusLog?.[c] || {};
+  const today = +new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" }).replace(/-/g, "");
+  const limit = intMinusDays(today, 8);
+  const out = [];
+  for (const p of state.players[c] || []) {
+    if (p.playerStatus !== "ok") continue;
+    const e = log[String(p.id)];
+    if (!e || e.s !== "ok" || !e.prev || !["injured", "suspended", "doubtful"].includes(e.prev)) continue;
+    if (e.d < limit) continue;
+    const h = (state.history[c] || {})[String(p.id)] || [];
+    if (h.length < 5) continue;
+    const max30 = Math.max(...h.slice(-30).map(x => x[1]));
+    const val = pVal(p);
+    if (max30 && val <= max30 * 0.95) out.push({ p, disc: max30 - val, prev: e.prev });
+  }
+  return out.sort((a, b) => b.disc - a.disc).slice(0, 8);
+}
+
 /* --- consejos personalizados: MI plantilla, MI dinero y MIS objetivos --- */
 function personalAdvice(c){
   const tips = [];
@@ -1523,6 +1566,25 @@ function viewConsejos(){
   const pool = players.filter(p => p.playerStatus !== "out_of_league");
   const values = pool.map(pVal).filter(v => v > 0).sort((a,b)=>a-b);
   const medianVal = values.length ? values[Math.floor(values.length/2)] : 0;
+
+  // --- detector de minutos (mi plantilla + vigilados) y radar de regresos ---
+  const minutesIds = [...new Set([
+    ...state.squad[c].filter(e => !e.custom).map(e => String(e.pid)),
+    ...state.watch[c].map(w => String(w.pid)),
+  ])];
+  const minAlerts = minutesIds
+    .map(pid => ({ p: state.byId[c].get(pid), a: minutesAlert(c, pid) }))
+    .filter(x => x.p && x.a)
+    .sort((x, y) => y.a.sev - x.a.sev);
+  const minutesHtml = minAlerts.length ? `
+    <div class="section-title">⏱ Pierden minutos (véndelos antes que el mercado se entere)</div>
+    <div class="card">${minAlerts.map(x => playerRow(x.p, { reason: `<span style="color:var(--orange)">${x.a.txt}</span>` })).join("")}</div>` : "";
+
+  const backs = comebackRadar(c);
+  const ETIQ_PREV = { injured: "lesión", suspended: "sanción", doubtful: "duda" };
+  const backsHtml = backs.length ? `
+    <div class="section-title">🩹 Regresos con descuento (vuelven y su valor aún no)</div>
+    <div class="card">${backs.map(x => playerRow(x.p, { reason: `<span class="up">−${fmtM(x.disc)} vs su pico</span> · vuelve de ${ETIQ_PREV[x.prev] || x.prev}` })).join("")}</div>` : "";
 
   // --- personalizados: mi plantilla, mi dinero, mis objetivos ---
   const personal = personalAdvice(c);
@@ -1602,6 +1664,8 @@ function viewConsejos(){
     sobre quién informarte, no verdades absolutas: la última palabra es tuya.
   </div>
   ${personalHtml}
+  ${minutesHtml}
+  ${backsHtml}
   ${sellAlerts.length ? section("⚠️ Mi plantilla: vigilar o vender", sellAlerts.map(x => playerRow(x.p, { reason: x.reason })), "") : ""}
   ${section("📈 Para fichar: en plena subida", buys.map(x => playerRow(x.p, { reason: reasonBuy(x) })), "Nadie con subida clara ahora mismo")}
   ${section("💎 Chollos: puntos por millón", cheap.map(x => playerRow(x.p, { reason: reasonCheap(x) })), "Sin chollos claros con estos datos")}
@@ -2095,6 +2159,138 @@ async function restoreBackup(day){
     render();
     toast("Restaurada la copia del " + lbl, "ok");
   } catch(e) { toast("No se pudo restaurar: " + e.message, "err"); }
+}
+
+/* =====================================================================
+   TARJETAS COMPARTIBLES COMO IMAGEN (canvas, sin librerías)
+   ===================================================================== */
+function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#2EC8FF"; }
+
+async function shareCanvas(canvas, filename){
+  canvas.toBlob(async blob => {
+    if (!blob) { toast("No se pudo generar la imagen", "err"); return; }
+    const file = new File([blob], filename, { type: "image/png" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); return; }
+      catch(e) { if (e.name === "AbortError") return; }
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast("Imagen descargada", "ok");
+  }, "image/png");
+}
+
+function cardCanvasBase(title, subtitle){
+  const W = 1080, H = 1350;
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const g = cv.getContext("2d");
+  const acc = cssVar("--acc"), logo = cssVar("--logo") || acc;
+  // fondo
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, "#0A1826"); bg.addColorStop(0.25, "#05070D"); bg.addColorStop(1, "#04050A");
+  g.fillStyle = bg; g.fillRect(0, 0, W, H);
+  // cabecera
+  g.fillStyle = logo;
+  g.font = "italic 900 64px Sora, Arial, sans-serif";
+  g.textAlign = "left";
+  g.fillText("FS", 64, 110);
+  g.fillStyle = "#F5F5F5";
+  g.font = "800 46px Sora, Arial, sans-serif";
+  g.fillText(title, 170, 96);
+  g.fillStyle = "#8a95a3";
+  g.font = "500 30px Inter, Arial, sans-serif";
+  g.fillText(subtitle, 170, 140);
+  g.strokeStyle = acc; g.lineWidth = 5;
+  g.beginPath(); g.moveTo(64, 176); g.lineTo(W - 64, 176); g.stroke();
+  // pie
+  g.fillStyle = "#5a6472";
+  g.font = "500 28px Inter, Arial, sans-serif";
+  g.textAlign = "center";
+  g.fillText("manugrraa.github.io/fantasy-studio · " + new Date().toLocaleDateString("es-ES"), W / 2, H - 48);
+  g.textAlign = "left";
+  return { cv, g, W, H, acc };
+}
+
+/* imagen del duelo de mánagers (usa el último duelo abierto) */
+function shareDuelImage(){
+  const D = window._lastDuel;
+  if (!D) { toast("Abre un duelo primero", "err"); return; }
+  const { cv, g, W, acc } = cardCanvasBase("DUELO DE MÁNAGERS", MODES[state.mode].label);
+  // nombres
+  g.textAlign = "center";
+  g.fillStyle = "#F5F5F5";
+  g.font = "800 52px Sora, Arial, sans-serif";
+  g.fillText(D.a.slice(0, 14), W * 0.28, 280);
+  g.fillText(D.b.slice(0, 14), W * 0.72, 280);
+  g.fillStyle = acc;
+  g.font = "900 44px Sora, Arial, sans-serif";
+  g.fillText("VS", W / 2, 280);
+  // filas
+  let y = 380;
+  g.font = "500 30px Inter, Arial, sans-serif";
+  for (const [lbl, va, vb, diff] of D.rows) {
+    g.fillStyle = "#5a6472";
+    g.font = "700 24px Inter, Arial, sans-serif";
+    g.fillText(String(lbl).toUpperCase(), W / 2, y - 34);
+    g.font = "700 38px Inter, Arial, sans-serif";
+    g.fillStyle = diff > 0 ? "#4ade80" : "#c9d2dc";
+    g.fillText(String(va), W * 0.28, y);
+    g.fillStyle = diff < 0 ? "#4ade80" : "#c9d2dc";
+    g.fillText(String(vb), W * 0.72, y);
+    g.strokeStyle = "rgba(255,255,255,0.07)"; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(84, y + 24); g.lineTo(W - 84, y + 24); g.stroke();
+    y += 92;
+    if (y > 1230) break;
+  }
+  shareCanvas(cv, "duelo-fantasy.png");
+}
+
+/* imagen-resumen de mi equipo */
+function shareTeamImage(){
+  const c = comp();
+  const st = squadStats(c);
+  const wealthArr = load("fs_wealth_hist", {})[c];
+  const { cv, g, W, acc } = cardCanvasBase("MI EQUIPO", MODES[state.mode].label);
+  let y = 300;
+  const stat = (lbl, val, color) => {
+    g.fillStyle = "#5a6472"; g.font = "700 26px Inter, Arial, sans-serif"; g.textAlign = "left";
+    g.fillText(lbl.toUpperCase(), 84, y);
+    g.fillStyle = color || "#F5F5F5"; g.font = "800 54px Sora, Arial, sans-serif"; g.textAlign = "right";
+    g.fillText(val, W - 84, y + 4);
+    g.strokeStyle = "rgba(255,255,255,0.07)"; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(84, y + 36); g.lineTo(W - 84, y + 36); g.stroke();
+    y += 110;
+    g.textAlign = "left";
+  };
+  if (wealthArr?.length) stat("Patrimonio", fmtM(wealthArr[wealthArr.length - 1][1]) + " €", acc);
+  stat("Valor de plantilla", fmtM(st.current) + " €");
+  stat("Invertido", fmtM(st.invested) + " €");
+  stat("Beneficio latente", fmtMSign(st.latent) + " €", st.latent >= 0 ? "#4ade80" : "#f87171");
+  stat("Beneficio realizado", fmtMSign(st.realized) + " €", st.realized >= 0 ? "#4ade80" : "#f87171");
+  // top 3 jugadores por valor
+  const top = state.squad[c]
+    .map(e => e.custom ? null : state.byId[c].get(String(e.pid)))
+    .filter(Boolean)
+    .sort((a, b) => pVal(b) - pVal(a))
+    .slice(0, 3);
+  if (top.length) {
+    g.fillStyle = "#5a6472"; g.font = "700 26px Inter, Arial, sans-serif";
+    g.fillText("MIS CROMOS GORDOS", 84, y);
+    y += 62;
+    for (const p of top) {
+      g.fillStyle = "#F5F5F5"; g.font = "700 40px Inter, Arial, sans-serif";
+      g.fillText(p.nickname.slice(0, 20), 84, y);
+      g.fillStyle = acc; g.font = "800 40px Inter, Arial, sans-serif"; g.textAlign = "right";
+      g.fillText(fmtM(pVal(p)) + " €", W - 84, y);
+      g.textAlign = "left";
+      y += 74;
+    }
+  }
+  shareCanvas(cv, "mi-equipo-fantasy.png");
 }
 
 /* =====================================================================
@@ -3473,7 +3669,7 @@ function viewLiga(){
       ${diagHtml()}`;
   }
 
-  const TABS = [["mercado","Mercado del día"],["pujas","Mis pujas"],["ventas","Mis ventas"],["equipo","Mi equipo"],["once","Once ideal"],["clausulas","🔓 Cláusulas"],["rivales","Rivales"],["actividad","Actividad"]];
+  const TABS = [["mercado","Mercado del día"],["pujas","Mis pujas"],["ventas","Mis ventas"],["equipo","Mi equipo"],["once","Once ideal"],["clausulas","🔓 Cláusulas"],["rivales","Rivales"],["prensa","📰 Prensa"],["actividad","Actividad"]];
   const tabsHtml = `<div class="chips-row no-scrollbar" style="margin-bottom:12px">${TABS.map(([id,l]) =>
     `<button class="chip ${state.ligaTab === id ? "active" : ""}" onclick="state.ligaTab='${id}';render()">${l}</button>`).join("")}</div>`;
 
@@ -3484,6 +3680,7 @@ function viewLiga(){
   else if (state.ligaTab === "equipo") body = ligaTabEquipo(c, d);
   else if (state.ligaTab === "once") body = ligaTabOnce(c, d);
   else if (state.ligaTab === "clausulas") body = ligaTabClausulas(c, d);
+  else if (state.ligaTab === "prensa") body = ligaTabPrensa(c, d);
   else if (state.ligaTab === "rivales") body = ligaTabRivales(c, d);
   else body = ligaTabActividad(c, d);
 
@@ -3978,10 +4175,12 @@ async function openManagerCompare(tid){
             <div style="text-align:left;font-weight:${diff < 0 ? 800 : 500};color:${diff < 0 ? "var(--green)" : "var(--text-2)"}">${vb}</div>
           </div>`).join("")}
       </div>
+      <button class="btn-acc" style="width:100%;margin-top:12px" onclick="shareDuelImage()">🖼 Compartir como imagen</button>
       <div style="font-size:10.5px;color:var(--text-3);margin-top:10px;line-height:1.5">
         Profit de plantilla = valor actual − lo pagado por cada jugador (≈ para los de plantilla inicial). En verde, quien gana cada duelo.
       </div>
     </div>`);
+  window._lastDuel = { a: me.manager || me.name, b: riv.manager || riv.name, rows };
 }
 
 /* --- pestaña: rivales (presupuestos, equipos y profit) --- */
@@ -4065,6 +4264,58 @@ function ligaTabRivales(c, d){
     </div>`;
   }).join("")}
   <button class="btn-ghost" style="width:100%;margin-top:6px" onclick="loadFullActivity(comp(), true)">Recalcular con el historial más reciente</button>`;
+}
+
+/* --- pestaña: prensa de la liga (titulares con los datos del historial) --- */
+function ligaTabPrensa(c, d){
+  const act = state.actFull[c];
+  if (!act || !act.done) {
+    if (!act || !act.loading) setTimeout(() => loadFullActivity(c), 30);
+    return `<div class="card"><div class="empty-state"><div class="big">📰</div>Redactando la crónica de tu liga…</div></div>`;
+  }
+  const B = computeBudgets(c);
+  if (!B) return `<div class="card"><div class="empty-state">Sin clasificación todavía</div></div>`;
+  const maps = managerMaps(c);
+  const claus = {};
+  const weeks6 = {};
+  for (const raw of act.items) {
+    const a = parseAct(raw);
+    const t1 = actTeam(a, maps, 1);
+    if (!t1) continue;
+    if (a.type === 32) claus[t1] = (claus[t1] || 0) + 1;
+    if (a.type === 6) weeks6[t1] = (weeks6[t1] || 0) + 1;
+  }
+  const name = r => esc(r.manager || r.name);
+  const rows = B.rows;
+  const avgOps = rows.reduce((a, r) => a + r.nBuys + r.nSells, 0) / (rows.length || 1);
+  const by = fn => [...rows].sort((a, b) => fn(b) - fn(a))[0];
+  const heads = [];
+  const rico = by(r => r.extra / Math.max(1, weeks6[r.tid] || 1));
+  if (rico && rico.extra) heads.push(["💰", `<b>${name(rico)}</b>, la gallina de los huevos de oro: ${fmtM(Math.round(rico.extra / Math.max(1, weeks6[rico.tid] || 1)))} de premio por jornada.`]);
+  const martillo = by(r => r.nBuys + r.nSells);
+  if (martillo && martillo.nBuys + martillo.nSells > 0) heads.push(["🔨", `<b>${name(martillo)}</b> no suelta el martillo: ${martillo.nBuys + martillo.nSells} operaciones ya.`]);
+  const clausTid = Object.keys(claus).sort((a, b) => claus[b] - claus[a])[0];
+  if (clausTid) { const r = rows.find(x => x.tid === clausTid); if (r) heads.push(["🔒", `<b>${name(r)}</b>, rey de la cláusula: ${claus[clausTid]} ${claus[clausTid] === 1 ? "robo" : "robos"} a domicilio.`]); }
+  const gastador = by(r => r.buys);
+  if (gastador && gastador.buys) heads.push(["💸", `<b>${name(gastador)}</b> quema la tarjeta: ${fmtM(gastador.buys)} gastados en fichajes.`]);
+  const vendedor = by(r => r.sells);
+  if (vendedor && vendedor.sells) heads.push(["🤑", `<b>${name(vendedor)}</b>, el mercader: ${fmtM(vendedor.sells)} ingresados en ventas.`]);
+  const monje = [...rows].sort((a, b) => (a.nBuys + a.nSells) - (b.nBuys + b.nSells))[0];
+  if (monje && monje.nBuys + monje.nSells <= 2) heads.push(["🧘", `<b>${name(monje)}</b> medita: solo ${monje.nBuys + monje.nSells} ${monje.nBuys + monje.nSells === 1 ? "operación" : "operaciones"}. ¿Estrategia o siesta?`]);
+
+  return `
+  <div class="section-title">📰 Titulares de la liga</div>
+  ${heads.map(([e, t]) => `<div class="card" style="padding:13px 15px;margin-bottom:8px;display:flex;gap:12px;align-items:flex-start">
+    <div style="font-size:22px">${e}</div>
+    <div style="font-size:13px;line-height:1.55;color:var(--text-2)">${t}</div>
+  </div>`).join("")}
+  <div class="section-title">Estilo de cada mánager</div>
+  <div class="card">${rows.map(r => `<div class="p-row" style="cursor:default">
+    <span class="rival-pos ${r.isMe ? "me" : ""}">${r.pos}</span>
+    <div class="p-main"><div class="p-name">${name(r)}${r.isMe ? " (tú)" : ""}</div>
+      <div class="p-meta">${r.nBuys + r.nSells} ops · ${fmtM(r.buys)} gastados · ${fmtM(r.sells)} vendidos</div></div>
+    <span class="badge">${managerStyle(c, r.tid, r, avgOps)}</span>
+  </div>`).join("")}</div>`;
 }
 
 /* --- pestaña: actividad --- */

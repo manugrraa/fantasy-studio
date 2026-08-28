@@ -169,13 +169,18 @@ STAT_KEYS = (
 def fetch_player_stats(comp, pid):
     d = get(f"/v1/competition/{comp}/player/{pid}?x-lang=es")
     agg = [0] * len(STAT_KEYS)
+    week_mins = {}
     for wk in d.get("playerStats", []):
         s = wk.get("stats", {})
         for i, k in enumerate(STAT_KEYS):
             v = s.get(k)
             if isinstance(v, (list, tuple)) and v:
                 agg[i] += v[0] or 0
-    return agg
+        wn = wk.get("weekNumber")
+        m = s.get("mins_played")
+        if wn is not None and isinstance(m, (list, tuple)) and m:
+            week_mins[str(wn)] = m[0] or 0
+    return agg, week_mins
 
 
 def update_stats(comp, players):
@@ -191,20 +196,51 @@ def update_stats(comp, players):
         print(f"[comp {comp}] estadisticas: ya bajadas hoy")
         return
     prev = st.get("players", {})
+    prev_mins = st.get("mins", {})
     out = {}
+    mins = {}
 
     def work(p):
         pid = str(p["id"])
         try:
-            out[pid] = fetch_player_stats(comp, pid)
+            agg, wm = fetch_player_stats(comp, pid)
+            out[pid] = agg
+            if wm:
+                mins[pid] = wm
         except Exception:
             if pid in prev:
                 out[pid] = prev[pid]
+            if pid in prev_mins:
+                mins[pid] = prev_mins[pid]
 
     with ThreadPoolExecutor(max_workers=6) as ex:
         list(ex.map(work, players))
-    save(path, {"date": today, "keys": list(STAT_KEYS), "players": out})
-    print(f"[comp {comp}] estadisticas: {len(out)} jugadores")
+    save(path, {"date": today, "keys": list(STAT_KEYS), "players": out, "mins": mins})
+    print(f"[comp {comp}] estadisticas: {len(out)} jugadores ({len(mins)} con minutos por jornada)")
+
+
+def update_status_log(comp, players):
+    """data/status_log_{comp}.json = {pid: {s: estado, d: desde, prev, prevd}}.
+
+    Registra CUANDO cambia el estado de cada jugador: la base del radar de
+    regresos (lesionado -> ok con el valor aun hundido = ventana de compra).
+    """
+    path = os.path.join(DATA, f"status_log_{comp}.json")
+    log = load(path, {})
+    today = today_int()
+    changes = 0
+    for p in players:
+        pid = str(p["id"])
+        cur = p.get("playerStatus") or "ok"
+        e = log.get(pid)
+        if e is None:
+            log[pid] = {"s": cur, "d": today}
+        elif e.get("s") != cur:
+            log[pid] = {"s": cur, "d": today, "prev": e.get("s"), "prevd": e.get("d")}
+            changes += 1
+    save(path, log)
+    if changes:
+        print(f"[comp {comp}] estados: {changes} cambios")
 
 
 def main():
@@ -236,6 +272,7 @@ def main():
 
         update_history(comp, players)
         update_stats(comp, players)
+        update_status_log(comp, players)
 
     save(os.path.join(DATA, "meta.json"), meta)
     print("meta actualizada:", meta["updatedAt"])
