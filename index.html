@@ -4326,7 +4326,18 @@ function ligaTabMercado(c, d){
   const act = state.actFull[c];
   if (!act || (!act.done && !act.loading)) setTimeout(() => loadFullActivity(c), 30);
   const biddersReady = !!(act && act.done);
-  return `${!biddersReady ? `<div style="font-size:11px;color:var(--text-3);margin-bottom:8px">Analizando el historial para estimar posibles pujadores…</div>` : ""}
+  // mi presupuesto para fichar: dinero real, lo comprometido en pujas activas y
+  // el tope de puja del juego (dinero + 20% del valor del equipo)
+  const selMe = state.myLeague[c];
+  const myMoney = ligaMoney(d.money);
+  const meSt = (d.standing || []).map(r => r.team || r).find(t => String(t.id ?? "") === String(selMe?.teamId ?? ""));
+  const myTeamVal = meSt?.teamValue != null ? +meSt.teamValue : 0;
+  const committed = market.reduce((a, it) => a + (+(((it.bid || it.myBid) || {}).money) || 0), 0);
+  const budgetHtml = myMoney != null ? `<div class="stat-grid" style="margin-bottom:10px">
+    ${statTile("Mi dinero", `<span class="${myMoney < 0 ? "down" : ""}" style="${myMoney >= 0 ? "color:var(--acc)" : ""}">${fmtM(myMoney)} €</span>`, committed ? "comprometido en pujas: " + fmtM(committed) : "libre para fichar")}
+    ${statTile("Puja máxima", fmtM(myMoney + Math.round(myTeamVal * 0.2)) + " €", "dinero + 20% de mi equipo")}
+  </div>` : "";
+  return `${budgetHtml}${!biddersReady ? `<div style="font-size:11px;color:var(--text-3);margin-bottom:8px">Analizando el historial para estimar posibles pujadores…</div>` : ""}
   ${market.map((it, idx) => {
     const pm = it.playerMaster || it.player || it;
     const pid = String(pm.id ?? "");
