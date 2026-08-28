@@ -2563,22 +2563,21 @@ function computeBudgets(c){
     };
   });
 
-  // calibración con mi cuenta: lo que mi dinero real se desvía de la fórmula
-  // son ingresos invisibles (premios); se estima proporcional a los puntos
-  let rate = 0, calibrated = false, incomplete = false;
+  // norma del juego: cada punto conseguido paga 100.000 €
+  const rate = 100000;
+  // mi dinero real sirve de contraste: si la fórmula se desvía mucho de él,
+  // el historial visible no cubre toda la liga y lo avisamos
+  let incomplete = false;
   const me = rows.find(r => r.isMe);
   if (me && myMoney != null) {
-    const invisible = myMoney - me.base;
-    // si sale negativo, el historial visible no cubre todas mis compras:
-    // los premios nunca restan. Marcamos aproximado y no propagamos el error.
-    if (invisible < -1000000) incomplete = true;
-    if (me.points > 0 && invisible > 0) { rate = invisible / me.points; calibrated = true; }
+    const deviation = myMoney - (me.base + rate * me.points);
+    if (Math.abs(deviation) > 3000000) incomplete = true;
   }
   for (const r of rows) {
     r.extra = Math.round(rate * r.points);
     r.budget = r.isMe && myMoney != null ? myMoney : r.base + r.extra;
   }
-  return { rows, calibrated, rate, incomplete };
+  return { rows, calibrated: false, rate, incomplete };
 }
 
 /* valor histórico de un jugador en una fecha (para profit de plantillas iniciales) */
@@ -2983,8 +2982,8 @@ function ligaTabRivales(c, d){
 
   return `
   <div style="font-size:11.5px;color:var(--text-3);margin-bottom:10px;line-height:1.5">
-    Presupuesto estimado: 100M iniciales + ventas − compras${B.calibrated ? " + premios por puntos (calibrado con tu dinero real)" : ""}.
-    ${B.incomplete ? `<br><span style="color:var(--orange)">⚠ El historial visible no cubre toda la liga: tómalo como aproximación.</span>` : ""}
+    Presupuesto estimado: 100M iniciales + ventas − compras + <b>100.000 € por punto</b>. Tu fila usa tu dinero real.
+    ${B.incomplete ? `<br><span style="color:var(--orange)">⚠ La fórmula no cuadra con tu dinero real: el historial visible quizá no cubre toda la liga. Tómalo como aproximación.</span>` : ""}
   </div>
   ${B.rows.map(r => {
     const open = state.rivalOpen === r.tid;
