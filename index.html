@@ -1437,7 +1437,7 @@ function miniSpark(c, pid, days){
   if (!h || h.length < 3) return "";
   const pts = h.slice(-(days || 30));
   const vals = pts.map(e => e[1]);
-  const min = Math.min(...vals, projTo ?? Infinity), max = Math.max(...vals, projTo ?? -Infinity);
+  const min = Math.min(...vals), max = Math.max(...vals);
   const range = (max - min) || 1;
   const W = 58, H = 24, P = 2;
   const step = (W - P*2) / (pts.length - 1);
@@ -2410,6 +2410,40 @@ function cardCanvasBase(title, subtitle){
   g.fillText("manugrraa.github.io/fantasy-studio · " + new Date().toLocaleDateString("es-ES"), W / 2, H - 48);
   g.textAlign = "left";
   return { cv, g, W, H, acc };
+}
+
+/* compartir como TEXTO (formato WhatsApp: *negritas* y emojis) */
+async function shareText(text){
+  if (navigator.share) {
+    try { await navigator.share({ text }); return; }
+    catch(e) { if (e.name === "AbortError") return; }
+  }
+  try { await navigator.clipboard.writeText(text); toast("Texto copiado: pégalo en WhatsApp", "ok"); }
+  catch(e) { prompt("Copia el texto:", text); }
+}
+function sharePrensaText(){
+  const P = window._lastPrensa;
+  if (!P) { toast("Abre la Prensa primero", "err"); return; }
+  shareText([
+    "📰 *LA PRENSA DE LA LIGA* — Fantasy Studio",
+    "",
+    ...P.heads,
+    "",
+    "*Estilos:*",
+    ...P.styles,
+  ].join("\n"));
+}
+function shareDuelText(){
+  const D = window._lastDuel;
+  if (!D) { toast("Abre un duelo primero", "err"); return; }
+  shareText([
+    `🆚 *DUELO DE MÁNAGERS* — ${D.a} vs ${D.b}`,
+    "",
+    ...D.rows.map(([lbl, va, vb, diff]) => {
+      const a = String(va).replace(/<[^>]+>/g, ""), b = String(vb).replace(/<[^>]+>/g, "");
+      return `${lbl}: ${diff > 0 ? "*" + a + "* ✅" : a} · ${diff < 0 ? "*" + b + "* ✅" : b}`;
+    }),
+  ].join("\n"));
 }
 
 /* imagen del duelo de mánagers (usa el último duelo abierto) */
@@ -4741,7 +4775,10 @@ async function openManagerCompare(tid){
             <div style="text-align:left;font-weight:${diff < 0 ? 800 : 500};color:${diff < 0 ? "var(--green)" : "var(--text-2)"}">${vb}</div>
           </div>`).join("")}
       </div>
-      <button class="btn-acc" style="width:100%;margin-top:12px" onclick="shareDuelImage()">🖼 Compartir como imagen</button>
+      <div style="display:flex;gap:9px;margin-top:12px">
+        <button class="btn-acc" style="flex:1" onclick="shareDuelImage()">🖼 Imagen</button>
+        <button class="btn-ghost" style="flex:1" onclick="shareDuelText()">💬 Texto WhatsApp</button>
+      </div>
       <div style="font-size:10.5px;color:var(--text-3);margin-top:10px;line-height:1.5">
         Profit de plantilla = valor actual − lo pagado por cada jugador (≈ para los de plantilla inicial). En verde, quien gana cada duelo.
       </div>
@@ -4964,8 +5001,14 @@ function ligaTabPrensa(c, d){
   const monje = [...rows].sort((a, b) => (a.nBuys + a.nSells) - (b.nBuys + b.nSells))[0];
   if (monje && monje.nBuys + monje.nSells <= 2) heads.push(["🧘", `<b>${name(monje)}</b> medita: solo ${monje.nBuys + monje.nSells} ${monje.nBuys + monje.nSells === 1 ? "operación" : "operaciones"}. ¿Estrategia o siesta?`]);
 
+  window._lastPrensa = {
+    heads: heads.map(([e, t]) => e + " " + t.replace(/<[^>]+>/g, "")),
+    styles: rows.map(r => `${r.pos}. ${r.manager || r.name}${r.isMe ? " (yo)" : ""} — ${managerStyle(c, r.tid, r, avgOps)} (${r.nBuys + r.nSells} ops)`),
+  };
   return `
-  <div class="section-title">📰 Titulares de la liga</div>
+  <div class="section-title">📰 Titulares de la liga
+    <button style="margin-left:auto;color:var(--acc);font-size:11.5px;font-weight:700" onclick="sharePrensaText()">💬 Compartir texto ›</button>
+  </div>
   ${heads.map(([e, t]) => `<div class="card" style="padding:13px 15px;margin-bottom:8px;display:flex;gap:12px;align-items:flex-start">
     <div style="font-size:22px">${e}</div>
     <div style="font-size:13px;line-height:1.55;color:var(--text-2)">${t}</div>
@@ -5195,6 +5238,8 @@ function openMenu(){
         </div>
       </details>
       <button class="btn-acc" style="width:100%" onclick="exportData()">Exportar mis datos</button>
+      <button class="btn-ghost" style="width:100%;margin-top:9px" onclick="openCSVExport()">📊 Exportar a Excel (CSV)</button>
+      <button class="btn-ghost" style="width:100%;margin-top:9px" onclick="openYearbook()">📕 Anuario de la temporada</button>
       <button class="btn-ghost" style="width:100%;margin-top:9px" onclick="document.getElementById('importFile').click()">Importar datos</button>
       <button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" onclick="wipeData()">Borrar todos mis datos</button>
     </div>`, ov => {
@@ -5202,6 +5247,132 @@ function openMenu(){
       if (k) k.textContent = syncKey();
     });
 }
+/* ---------- exportación CSV (Excel en español: ; y BOM) ---------- */
+function dlCSV(name, rows){
+  const csv = "﻿" + rows.map(r => r.map(v => {
+    const s = String(v ?? "");
+    return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(";")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  toast("CSV descargado: ábrelo con Excel", "ok");
+}
+function openCSVExport(){
+  openModal(`
+    ${modalHead("📊 Exportar a Excel")}
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:8px">
+      <button class="btn-ghost" style="justify-content:flex-start;padding:13px 15px" onclick="exportCSVKind('movs')">📒 Movimientos (compras y ventas)</button>
+      <button class="btn-ghost" style="justify-content:flex-start;padding:13px 15px" onclick="exportCSVKind('plantilla')">👥 Mi Plantilla con plusvalías</button>
+      <button class="btn-ghost" style="justify-content:flex-start;padding:13px 15px" onclick="exportCSVKind('patrimonio')">📈 Patrimonio diario</button>
+      <button class="btn-ghost" style="justify-content:flex-start;padding:13px 15px" onclick="exportCSVKind('rivales')">💰 Caja de rivales (histórico)</button>
+    </div>`);
+}
+function exportCSVKind(kind){
+  const c = comp();
+  const hoy = todayISO();
+  if (kind === "movs") {
+    const rows = [["Fecha", "Tipo", "Jugador", "Posición", "Precio", "Beneficio", "Origen"]];
+    for (const m of [...state.moves[c]].sort((a, b) => (a.date || "").localeCompare(b.date || ""))) {
+      rows.push([m.date || "", m.type === "buy" ? "Compra" : "Venta", m.name, (POS[String(m.pos)] || {}).tag || "", m.price || 0, m.type === "sell" ? (m.profit ?? "") : "", m.real ? "Liga" : "Manual"]);
+    }
+    dlCSV(`movimientos_${hoy}.csv`, rows);
+  } else if (kind === "plantilla") {
+    const rows = [["Jugador", "Posición", "Equipo", "Origen", "Precio compra", "Fecha compra", "Valor actual", "Plusvalía", "Cambio hoy"]];
+    for (const e of state.squad[c]) {
+      const p = e.custom ? null : state.byId[c].get(String(e.pid));
+      const val = p ? pVal(p) : "";
+      rows.push([e.name, (POS[String(e.pos)] || {}).tag || "", p ? (teamOf(p)?.name || "") : "", e.draft ? "De inicio" : "Compra", e.buyPrice || 0, e.buyDate || "", val, p ? val - (e.buyPrice || 0) : "", p ? deltas(c, e.pid).d1 : ""]);
+    }
+    dlCSV(`plantilla_${hoy}.csv`, rows);
+  } else if (kind === "patrimonio") {
+    const arr = load("fs_wealth_hist", {})[c] || [];
+    const rows = [["Fecha", "Patrimonio", "Dinero", "Valor equipo"]];
+    for (const e of arr) rows.push([String(e[0]).replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3"), e[1], e[2], e[3]]);
+    if (rows.length < 2) { toast("Aún no hay historial de patrimonio", "err"); return; }
+    dlCSV(`patrimonio_${hoy}.csv`, rows);
+  } else if (kind === "rivales") {
+    const bh = load("fs_budget_hist", {})[c] || {};
+    const maps = state.liga.data[c] ? managerMaps(c) : { nameOf: new Map() };
+    const rows = [["Fecha", "Mánager", "Presupuesto estimado"]];
+    for (const tid in bh) for (const e of bh[tid]) {
+      rows.push([String(e[0]).replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3"), maps.nameOf.get(tid) || tid, e[1]]);
+    }
+    if (rows.length < 2) { toast("Abre Rivales alguna vez para acumular historial", "err"); return; }
+    dlCSV(`caja_rivales_${hoy}.csv`, rows);
+  }
+}
+
+/* ---------- 📕 anuario de la temporada ---------- */
+function openYearbook(){
+  const c = comp();
+  const st = squadStats(c);
+  const wealth = load("fs_wealth_hist", {})[c] || [];
+  const sells = state.moves[c].filter(m => m.type === "sell" && m.profit != null);
+  const buys = state.moves[c].filter(m => m.type === "buy");
+  const best = sells.length ? sells.reduce((a, b) => a.profit > b.profit ? a : b) : null;
+  const worst = sells.length ? sells.reduce((a, b) => a.profit < b.profit ? a : b) : null;
+  const bigBuy = buys.length ? buys.reduce((a, b) => (a.price || 0) > (b.price || 0) ? a : b) : null;
+  const okPct = sells.length ? Math.round(sells.filter(m => m.profit > 0).length / sells.length * 100) : null;
+  // mi mejor jornada: suma de las 11 mejores puntuaciones de mi plantilla por jornada
+  let bestWeek = null;
+  const wn = state.meta?.comps?.[c]?.weekNumber || 1;
+  for (let w = 1; w <= wn; w++) {
+    const pts = state.squad[c]
+      .map(e => e.custom ? null : state.byId[c].get(String(e.pid)))
+      .filter(Boolean)
+      .map(p => { const x = (p.weekPoints || []).find(q => q.weekNumber === w); return x ? x.points || 0 : 0; })
+      .sort((a, b) => b - a).slice(0, 11);
+    const total = pts.reduce((a, b) => a + b, 0);
+    if (total > 0 && (!bestWeek || total > bestWeek.total)) bestWeek = { w, total };
+  }
+  const B = state.liga.data[c] ? computeBudgets(c) : null;
+  const me = B?.rows.find(r => r.isMe);
+  const wDelta = wealth.length >= 2 ? wealth[wealth.length - 1][1] - wealth[0][1] : null;
+  const item = (e, t) => `<div class="card" style="padding:12px 14px;margin-bottom:8px;display:flex;gap:11px;align-items:flex-start">
+    <div style="font-size:19px">${e}</div><div style="font-size:12.5px;line-height:1.55;color:var(--text-2)">${t}</div></div>`;
+  openModal(`
+    ${modalHead("📕 Anuario 2026/27")}
+    <div class="modal-body">
+      <div style="font-size:11.5px;color:var(--text-3);margin-bottom:12px">${MODES[state.mode].label} · hasta hoy (${new Date().toLocaleDateString("es-ES")}). Al acabar la temporada, este será tu libro del año.</div>
+      ${me ? item("🏆", `Vas <b>${me.pos}º</b> con <b>${me.points} puntos</b> en tu liga.`) : ""}
+      ${wDelta != null ? item(wDelta >= 0 ? "📈" : "📉", `Patrimonio: <b>${fmtM(wealth[wealth.length - 1][1])} €</b> (${fmtMSign(wDelta)} desde el inicio).`) : ""}
+      ${item("💼", `Plantilla: <b>${st.n}</b> jugadores, ${fmtM(st.current)} € de valor, latente ${fmtMSign(st.latent)}.`)}
+      ${okPct != null ? item("🎓", `${sells.length} ventas, <b>${okPct} %</b> con beneficio (${fmtMSign(st.realized)} realizados).`) : ""}
+      ${best && best.profit > 0 ? item("🥇", `Tu mejor operación: <b>${esc(best.name)}</b> ${fmtMSign(best.profit)}.`) : ""}
+      ${worst && worst.profit < 0 ? item("💀", `La espinita: <b>${esc(worst.name)}</b> ${fmtMSign(worst.profit)}.`) : ""}
+      ${bigBuy ? item("💎", `Tu fichaje más caro: <b>${esc(bigBuy.name)}</b> por ${fmtM(bigBuy.price)}.`) : ""}
+      ${bestWeek ? item("🔥", `Tu mejor jornada: <b>J${bestWeek.w}</b> con ~${bestWeek.total} puntos de plantilla.`) : ""}
+      <button class="btn-acc" style="width:100%;margin-top:6px" onclick="shareYearbookImage()">🖼 Compartir anuario como imagen</button>
+    </div>`);
+  window._lastYearbook = { me, wealth, st, okPct, sells: sells.length, best, worst, bigBuy, bestWeek, realized: st.realized };
+}
+function shareYearbookImage(){
+  const Y = window._lastYearbook;
+  if (!Y) return;
+  const { cv, g, W, acc } = cardCanvasBase("ANUARIO 2026/27", MODES[state.mode].label);
+  let y = 300;
+  const line = (lbl, val, color) => {
+    g.fillStyle = "#5a6472"; g.font = "700 26px Inter, Arial, sans-serif"; g.textAlign = "left";
+    g.fillText(lbl.toUpperCase(), 84, y);
+    g.fillStyle = color || "#F5F5F5"; g.font = "800 48px Sora, Arial, sans-serif"; g.textAlign = "right";
+    g.fillText(String(val), W - 84, y + 4);
+    g.strokeStyle = "rgba(255,255,255,0.07)"; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(84, y + 34); g.lineTo(W - 84, y + 34); g.stroke();
+    y += 104; g.textAlign = "left";
+  };
+  if (Y.me) line("Posición en mi liga", "#" + Y.me.pos + " · " + Y.me.points + " pts", acc);
+  if (Y.wealth.length) line("Patrimonio", fmtM(Y.wealth[Y.wealth.length - 1][1]) + " €");
+  line("Beneficio realizado", fmtMSign(Y.realized) + " €", Y.realized >= 0 ? "#4ade80" : "#f87171");
+  if (Y.okPct != null) line("Ventas en verde", Y.okPct + " %");
+  if (Y.best && Y.best.profit > 0) line("Mejor operación", Y.best.name.slice(0, 14) + " " + fmtMSign(Y.best.profit), "#4ade80");
+  if (Y.bestWeek) line("Mejor jornada", "J" + Y.bestWeek.w + " · " + Y.bestWeek.total + " pts");
+  shareCanvas(cv, "anuario-fantasy.png");
+}
+
 function exportData(){
   const payload = {
     app: "FantasyStudio", version: 1, exportedAt: new Date().toISOString(),

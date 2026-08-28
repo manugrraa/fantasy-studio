@@ -19,6 +19,58 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
 UA = {"User-Agent": "Mozilla/5.0 (compatible; FantasyStudio/1.0)"}
 MOVE_THRESHOLD = 400000
+API = "https://fantasy-api.llt-services.com/api"
+
+
+def api_get(path):
+    req = urllib.request.Request(API + path, headers={**UA, "Accept": "application/json", "x-lang": "es"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
+def live_goal_alerts(personal, meta, state):
+    """⚽/🅰️ En jornada en vivo: goles y asistencias de MIS jugadores al momento.
+
+    Consulta el detalle público de cada jugador de mi plantilla/once (~15
+    peticiones) y compara los goles/asistencias de la jornada en curso con lo
+    ya avisado (state['ga']). Solo corre con la jornada en juego (o FS_FORCE_LIVE).
+    """
+    alerts = []
+    ga = state.setdefault("ga", {})
+    force = os.environ.get("FS_FORCE_LIVE") == "1"
+    for comp in ("2", "1"):
+        week = (meta.get("comps") or {}).get(comp) or {}
+        wn = week.get("weekNumber")
+        if not wn or (not week.get("isLive") and not force):
+            continue
+        pids = []
+        for e in (personal.get("squad") or {}).get(comp) or []:
+            if e.get("pid") and not e.get("custom"):
+                pids.append(str(e["pid"]))
+        for pid in ((personal.get("lineup") or {}).get(comp) or {}).get("ids") or []:
+            if str(pid) not in pids:
+                pids.append(str(pid))
+        for pid in pids[:20]:
+            try:
+                d = api_get(f"/v1/competition/{comp}/player/{pid}?x-lang=es")
+            except Exception:
+                continue
+            name = d.get("nickname") or d.get("name") or "Tu jugador"
+            wk = next((w for w in d.get("playerStats") or [] if w.get("weekNumber") == wn), None)
+            if not wk:
+                continue
+            s = wk.get("stats") or {}
+            goals = (s.get("goals") or [0])[0] or 0
+            assists = (s.get("goal_assist") or [0])[0] or 0
+            k = f"{comp}:{pid}:{wn}"
+            prev = ga.get(k) or [0, 0]
+            if goals > prev[0]:
+                alerts.append(f"⚽ ¡GOOOL de <b>{name}</b>!{' (x' + str(goals) + ')' if goals > 1 else ''} — J{wn}")
+            if assists > prev[1]:
+                alerts.append(f"🅰️ ¡Asistencia de <b>{name}</b>! — J{wn}")
+            if goals > prev[0] or assists > prev[1]:
+                ga[k] = [goals, assists]
+    return alerts
 
 
 def load(name, default):
@@ -81,6 +133,10 @@ def main():
     today = today_int()
     alerts = []
 
+    # goles y asistencias en vivo de mis jugadores
+    meta = load("meta.json", {})
+    alerts.extend(live_goal_alerts(personal, meta, state))
+
     for comp in ("2", "1"):
         players = {str(p["id"]): p for p in load(f"players_{comp}.json", [])}
         hist = load(f"history_{comp}.json", {})
@@ -126,8 +182,8 @@ def main():
                 emoji = "🚀" if d1 > 0 else "⚠️"
                 alerts.append(f"{emoji} <b>{p['nickname']}</b> (tu plantilla) {sign(d1)} hoy → {fmt_m(val)}.")
 
-    save("alert_state.json", state)
     if not alerts:
+        save("alert_state.json", state)  # re-armes y limpieza aunque no haya avisos
         print("sin novedades")
         return
 
@@ -146,6 +202,7 @@ def main():
     print("alerta enviada" if ok else "fallo al enviar")
     if not ok:
         sys.exit(1)
+    save("alert_state.json", state)  # solo tras enviar con éxito: si falla, se reintenta
 
 
 if __name__ == "__main__":
