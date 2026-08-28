@@ -2127,11 +2127,61 @@ function delMove(id){
    ===================================================================== */
 const AUTHCFG = {
   tokenBase: "https://login.laliga.es/laligadspprob2c.onmicrosoft.com/oauth2/v2.0/token",
+  authorizeBase: "https://login.laliga.es/laligadspprob2c.onmicrosoft.com/oauth2/v2.0/authorize",
   loginPolicy: "B2C_1A_ResourceOwnerv2",
   altPolicy: "B2C_1A_5ULAIP_PARAMETRIZED_SIGNIN",
   clientId: "af88bcff-1157-40a0-b579-030728aacf0b",
   redirect: "authredirect://com.lfp.laligafantasy",
+  socialRedirect: "https://jwt.ms", // única URL https registrada; jwt.ms solo muestra el code, no lo usa
 };
+
+/* --- Login social (Google / Apple / Facebook): flujo Authorization Code + PKCE.
+   El usuario inicia sesión en la página OFICIAL de LaLiga y copia el enlace de
+   vuelta (que lleva el ?code=). El intercambio code->token va directo del
+   navegador al servidor de LaLiga (tiene CORS). No pasa por ningún tercero. --- */
+function b64url(bytes){
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+async function pkcePair(){
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return { verifier, challenge: b64url(new Uint8Array(digest)) };
+}
+async function buildSocialUrl(){
+  const { verifier, challenge } = await pkcePair();
+  const stt = b64url(crypto.getRandomValues(new Uint8Array(12)));
+  sessionStorage.setItem("fs_pkce", JSON.stringify({ verifier, state: stt }));
+  const params = new URLSearchParams({
+    p: AUTHCFG.altPolicy, client_id: AUTHCFG.clientId, response_type: "code",
+    redirect_uri: AUTHCFG.socialRedirect, scope: "openid offline_access",
+    code_challenge: challenge, code_challenge_method: "S256", state: stt, nonce: stt,
+    response_mode: "query",
+  });
+  return `${AUTHCFG.authorizeBase}?${params.toString()}`;
+}
+async function socialExchange(pastedUrl){
+  const m = String(pastedUrl).match(/[?&#]code=([^&\s]+)/);
+  if (!m) throw new Error("No encuentro el código en ese enlace. Copia la barra de direcciones ENTERA de la página jwt.ms.");
+  const code = decodeURIComponent(m[1]);
+  const saved = JSON.parse(sessionStorage.getItem("fs_pkce") || "{}");
+  if (!saved.verifier) throw new Error("Sesión de login caducada. Pulsa de nuevo «Entrar con Google» y repite.");
+  const body = new URLSearchParams({
+    grant_type: "authorization_code", client_id: AUTHCFG.clientId, code,
+    redirect_uri: AUTHCFG.socialRedirect, code_verifier: saved.verifier, scope: "openid offline_access",
+  });
+  const r = await fetch(`${AUTHCFG.tokenBase}?p=${AUTHCFG.altPolicy}`, {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body,
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.access_token) {
+    throw new Error((d.error_description || d.error || "No se pudo canjear el código").split("\r")[0]);
+  }
+  d.expAt = Date.now() + ((+d.expires_in || 3000) * 1000);
+  d.policy = AUTHCFG.altPolicy;
+  sessionStorage.removeItem("fs_pkce");
+  saveAuth(d);
+  return d;
+}
 function saveAuth(a){
   state.auth = a;
   if (a) localStorage.setItem(LS.auth, JSON.stringify(a));
@@ -2335,20 +2385,34 @@ function viewLiga(){
   if (!state.auth) {
     return `
     <div class="section-title">${IC.lock.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Iniciar sesión en LaLiga Fantasy</div>
-    <div class="card" style="padding:16px">
-      <div class="field"><label>Email de tu cuenta LaLiga</label>
-        <input id="loginEmail" type="email" autocomplete="username" placeholder="tu@email.com"></div>
-      <div class="field"><label>Contraseña</label>
-        <input id="loginPass" type="password" autocomplete="current-password" placeholder="••••••••"></div>
-      <button class="btn-acc" style="width:100%" id="loginGo" onclick="doLogin()">Entrar</button>
-      <div style="font-size:11.5px;color:var(--text-3);margin-top:12px;line-height:1.5">
-        ${IC.lock.replace('class="ic"','class="ic" style="width:11px;height:11px;vertical-align:-1.5px"')}
-        La contraseña viaja cifrada y <b>solo</b> al servidor oficial de LaLiga (login.laliga.es). No se guarda
-        en ningún sitio; aquí solo queda la sesión, en este dispositivo. Si entras con Google en la app oficial,
-        necesitas crear una contraseña en tu cuenta LaLiga primero.
+    <div class="card" style="padding:16px;margin-bottom:12px">
+      <div style="font-size:13px;color:var(--text-2);line-height:1.55;margin-bottom:14px">
+        <b>¿Entras al Fantasy con Google, Apple o Facebook?</b> Usa este botón. Se abre la página
+        <b>oficial</b> de LaLiga para que inicies sesión como siempre; al terminar, copia el enlace y pégalo aquí.
       </div>
-      <button class="btn-ghost" style="width:100%;margin-top:12px" onclick="changeWorkerUrl()">Cambiar servidor puente</button>
-    </div>`;
+      <button class="btn-acc" style="width:100%" onclick="startSocial()">${IC.user.replace('class="ic"','class="ic" style="width:16px;height:16px"')} Entrar con Google / Apple / Facebook</button>
+      <div id="socialStep"></div>
+    </div>
+
+    <details class="card" style="padding:0" id="emailDetails">
+      <summary style="padding:14px 16px;cursor:pointer;font-size:13.5px;font-weight:600;color:var(--text-2);list-style:none">
+        ${IC.lock.replace('class="ic"','class="ic" style="width:14px;height:14px;vertical-align:-3px"')} Tengo email y contraseña de LaLiga</summary>
+      <div style="padding:0 16px 16px">
+        <div class="field"><label>Email de tu cuenta LaLiga</label>
+          <input id="loginEmail" type="email" autocomplete="username" placeholder="tu@email.com"></div>
+        <div class="field"><label>Contraseña</label>
+          <input id="loginPass" type="password" autocomplete="current-password" placeholder="••••••••"></div>
+        <button class="btn-acc" style="width:100%" id="loginGo" onclick="doLogin()">Entrar</button>
+      </div>
+    </details>
+
+    <div style="font-size:11.5px;color:var(--text-3);margin-top:12px;line-height:1.5">
+      ${IC.lock.replace('class="ic"','class="ic" style="width:11px;height:11px;vertical-align:-1.5px"')}
+      El inicio de sesión ocurre <b>solo</b> en el servidor oficial de LaLiga (login.laliga.es). Ni tu contraseña
+      ni tu login de Google pasan por Fantasy Studio ni por el servidor puente: aquí solo queda la sesión ya creada,
+      guardada en este dispositivo.
+    </div>
+    <button class="btn-ghost" style="width:100%;margin-top:12px" onclick="changeWorkerUrl()">Cambiar servidor puente</button>`;
   }
 
   // Paso 3: datos de mi liga
@@ -2510,6 +2574,48 @@ async function doLogin(){
   } catch(e) {
     toast(e.message, "err");
     btn.disabled = false; btn.textContent = "Entrar";
+  }
+}
+async function startSocial(){
+  let url;
+  try { url = await buildSocialUrl(); }
+  catch(e) { toast("Este navegador no permite el login seguro (PKCE). Prueba en Chrome/Safari.", "err"); return; }
+  window.open(url, "_blank", "noopener");
+  const box = document.getElementById("socialStep");
+  if (box) box.innerHTML = `
+    <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
+      <div style="font-size:12.5px;color:var(--text-2);line-height:1.55;margin-bottom:10px">
+        Se ha abierto la página de LaLiga en otra pestaña. Inicia sesión con tu método de siempre.
+        Al terminar verás una página en blanco de <b>jwt.ms</b>: <b>copia su dirección web entera</b>
+        (la barra de arriba del navegador) y pégala aquí:
+      </div>
+      <div class="field" style="margin-bottom:10px">
+        <input id="socialUrl" placeholder="https://jwt.ms/?code=…" autocomplete="off" inputmode="url">
+      </div>
+      <button class="btn-acc" style="width:100%" id="socialGo" onclick="finishSocial()">Terminar de conectar</button>
+      <div style="font-size:11px;color:var(--text-3);margin-top:9px">
+        ¿No se abrió la pestaña? <a href="${esc(url)}" target="_blank" rel="noopener" style="color:var(--acc)">Ábrela aquí</a>.
+      </div>
+    </div>`;
+  const inp = document.getElementById("socialUrl");
+  if (inp) inp.focus();
+}
+async function finishSocial(){
+  const inp = document.getElementById("socialUrl");
+  const btn = document.getElementById("socialGo");
+  const val = (inp?.value || "").trim();
+  if (!val) { toast("Pega el enlace de jwt.ms", "err"); return; }
+  if (btn) { btn.disabled = true; btn.textContent = "Conectando…"; }
+  try {
+    await socialExchange(val);
+    toast("Sesión iniciada", "ok");
+    vibrate(14);
+    state.liga = { loading:false, data:{}, errors:[] };
+    render();
+    loadLiga(true);
+  } catch(e) {
+    toast(e.message, "err");
+    if (btn) { btn.disabled = false; btn.textContent = "Terminar de conectar"; }
   }
 }
 function pickLeague(id){
