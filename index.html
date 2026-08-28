@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Fantasy Studio</title>
 <meta name="theme-color" content="#000000">
+<!-- Seguridad: solo se permite hablar con LaLiga, el worker propio y los proxies
+     de respaldo; imágenes solo del CDN oficial. Bloquea la exfiltración de datos
+     aunque se colara contenido malicioso. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://assets-fantasy.llt-services.com; connect-src 'self' https://fantasy-api.llt-services.com https://login.laliga.es https://*.workers.dev https://corsproxy.io https://api.allorigins.win; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Fantasy">
