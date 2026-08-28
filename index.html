@@ -592,7 +592,7 @@ const state = {
   calWeek: null,
   liveAt: null,
   // cuenta Fantasy enlazada
-  workerUrl: localStorage.getItem("fs_worker") || "",
+  workerUrl: localStorage.getItem("fs_worker") || "https://fantasy-proxy.manugrraa.workers.dev",
   auth: null,           // tokens de sesión (se carga tras definir load())
   myLeague: {},         // comp -> {leagueId, name, teamId}
   liga: { loading:false, data:{}, errors:[] },
