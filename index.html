@@ -3390,6 +3390,9 @@ async function loadLiga(force){
   st.loading = false;
   snapshotWealth(c);
   scheduleSync(); // sube dinero/plantilla frescos a la nube personal
+  // el historial se mantiene al día en segundo plano: así tus compras/ventas
+  // reales entran solas en Mi Plantilla y Movimientos con precio y fecha exactos
+  if (state.auth && !state.actFull[c]?.done) loadFullActivity(c);
   if (state.view === "liga") render();
 }
 
@@ -3473,6 +3476,8 @@ async function loadFullActivity(c, force){
   }
   st.loading = false;
   if (state.view === "liga") render();
+  // importa en silencio MIS operaciones nuevas (precio y fecha reales)
+  if (st.done) syncRealMoves(true);
 }
 
 /* Esquema REAL de la actividad (visto en LaLigaApp): activityTypeId
@@ -3873,13 +3878,13 @@ function withdrawFromMarket(marketId, name){
 }
 
 /* ---------- sincronizar movimientos reales de mi liga ---------- */
-async function syncRealMoves(){
+async function syncRealMoves(auto){
   const c = comp();
-  if (!state.auth || !state.myLeague[c]) { toast("Conéctate en Mi Liga primero", "err"); return; }
-  toast("Leyendo el historial de tu liga…");
+  if (!state.auth || !state.myLeague[c]) { if (!auto) toast("Conéctate en Mi Liga primero", "err"); return; }
+  if (!auto) toast("Leyendo el historial de tu liga…");
   await loadFullActivity(c);
   const act = state.actFull[c];
-  if (!act?.done) { toast("No se pudo leer la actividad", "err"); return; }
+  if (!act?.done) { if (!auto) toast("No se pudo leer la actividad", "err"); return; }
   const myId = String(state.myLeague[c].teamId || "");
   const maps = managerMaps(c);
   const existing = new Set(state.moves[c].map(m => m.actId).filter(Boolean));
@@ -3898,10 +3903,11 @@ async function syncRealMoves(){
     a._kind = kind;
     news.push(a);
   }
-  if (!news.length) { toast("Movimientos ya al día con tu liga", "ok"); return; }
+  if (!news.length) { if (!auto) toast("Movimientos ya al día con tu liga", "ok"); return; }
   const buys = news.filter(a => a._kind === "buy").length;
   const sells = news.length - buys;
-  if (!confirm(`Se importarán ${news.length} movimientos reales de tu liga (${buys} compras, ${sells} ventas). Las ventas calculan su beneficio contra tu precio de compra en Mi Plantilla si lo tienes. ¿Continuar?`)) return;
+  if (!auto && !confirm(`Se importarán ${news.length} movimientos reales de tu liga (${buys} compras, ${sells} ventas). Las ventas calculan su beneficio contra tu precio de compra en Mi Plantilla si lo tienes. ¿Continuar?`)) return;
+  const resumen = [];
   for (const a of news.reverse()) { // de viejo a nuevo
     const date = a.date ? String(a.date).slice(0, 10) : todayISO();
     const money = Math.abs(+a.money);
@@ -3910,17 +3916,26 @@ async function syncRealMoves(){
       const buyPrice = entry ? entry.buyPrice : null;
       state.moves[c].push({ id: uid(), actId: a.id, real: true, type: "sell", pid: a.pid, name: a.name, price: money, date, buyPrice, profit: buyPrice != null ? money - buyPrice : null });
       if (entry) state.squad[c] = state.squad[c].filter(e => e.id !== entry.id);
+      resumen.push(`venta ${a.name} +${fmtM(money)}`);
     } else {
       const local = a.pid ? state.byId[c].get(a.pid) : null;
       state.moves[c].push({ id: uid(), actId: a.id, real: true, type: "buy", pid: a.pid, name: a.name, pos: local ? String(local.positionId) : null, price: money, date });
-      if (a.pid && local && !squadEntry(a.pid)) {
+      const entry = a.pid ? squadEntry(a.pid) : null;
+      if (entry) {
+        // ya lo tenías a mano: se corrige al precio y fecha REALES de la compra
+        entry.buyPrice = money;
+        entry.buyDate = date;
+        entry.imported = true;
+      } else if (a.pid && local) {
         state.squad[c].push({ id: uid(), pid: a.pid, name: a.name, pos: String(local.positionId), teamId: String(local.teamId), buyPrice: money, buyDate: date, custom: false, imported: true });
       }
+      resumen.push(`compra ${a.name} ${fmtM(money)}`);
     }
   }
   persist();
   render();
-  toast(news.length + " movimientos reales importados", "ok");
+  vibrate(14);
+  toast((auto ? "🔄 Tu liga trajo " + news.length + (news.length === 1 ? " operación: " : " operaciones: ") : news.length + " movimientos importados: ") + resumen.slice(0, 2).join(" · ") + (resumen.length > 2 ? " …" : ""), "ok");
 }
 
 function ligaPlayerRow(pm, right){
