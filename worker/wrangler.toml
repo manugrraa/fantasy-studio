@@ -6,3 +6,8 @@ workers_dev = true
 [[kv_namespaces]]
 binding = "SYNC"
 id = "fd1bb848f3f34d3a8ece4e5e17193a2b"
+
+# Disparo del workflow de datos a la 01:00 de Madrid (valores nuevos del juego).
+# UTC: 23:05/23:20 = 01:05/01:20 en verano; 0:05/0:20 = 01:05/01:20 en invierno.
+[triggers]
+crons = ["5,20 23 * * *", "5,20 0 * * *"]

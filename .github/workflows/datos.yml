@@ -6,6 +6,11 @@ on:
     # valores de madrugada). El script solo commitea si algo cambió, y las
     # estadísticas pesadas (1 petición/jugador) solo se bajan una vez al día.
     - cron: "6,21,36,51 * * * *"
+    # Refuerzo de la 01:00 de Madrid: el juego publica los valores nuevos a esa
+    # hora. GitHub ignora a menudo el cron frecuente, pero los diarios suelen
+    # entrar; 23h UTC cubre el verano (CEST) y 0h UTC el invierno (CET).
+    - cron: "10,40 23 * * *"
+    - cron: "10,40 0 * * *"
   workflow_dispatch:
 
 permissions:

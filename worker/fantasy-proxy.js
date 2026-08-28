@@ -76,6 +76,28 @@ async function handleSync(request, url, env, cors, originOk){
 }
 
 export default {
+  /**
+   * Cron del Worker (fiable, a diferencia del de GitHub): a la hora en que el
+   * juego publica los valores nuevos (01:00 de Madrid) lanza el workflow de
+   * datos vía workflow_dispatch. Los crons van en UTC en wrangler.toml:
+   * 23h UTC = 01:00 Madrid en verano; 0h UTC = 01:00 Madrid en invierno.
+   * Necesita el secret GH_TOKEN (npx wrangler secret put GH_TOKEN, token con
+   * scopes repo+workflow). Sin el secret no hace nada.
+   */
+  async scheduled(event, env, ctx) {
+    if (!env.GH_TOKEN) return;
+    await fetch("https://api.github.com/repos/manugrraa/fantasy-studio/actions/workflows/datos.yml/dispatches", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + env.GH_TOKEN,
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "User-Agent": "FantasyStudio-cron",
+      },
+      body: JSON.stringify({ ref: "main" }),
+    });
+  },
+
   async fetch(request, env) {
     const url = new URL(request.url);
     const origin = request.headers.get("Origin") || "";
