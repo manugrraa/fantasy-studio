@@ -3208,12 +3208,11 @@ function openMenu(){
       <details class="card" style="padding:0;margin-bottom:9px">
         <summary style="padding:12px 15px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-2);list-style:none">📬 Resumen diario por Telegram (configurar)</summary>
         <div style="padding:0 15px 14px;font-size:12px;color:var(--text-2);line-height:1.65">
-          Cada mañana a las 8:45 puedes recibir en Telegram las subidas, bajadas y chollos del día. Configuración (una vez, 3 min):<br>
-          <b>1.</b> En Telegram, habla con <b>@BotFather</b> → /newbot → ponle nombre → te da un <b>token</b>.<br>
-          <b>2.</b> Escríbele un «hola» a tu bot recién creado, y luego abre
-          <span style="color:var(--acc)">api.telegram.org/botTU_TOKEN/getUpdates</span> en el navegador: el número en <b>"chat":{"id":…}</b> es tu <b>chat id</b>.<br>
-          <b>3.</b> En GitHub: <span style="color:var(--acc)">github.com/manugrraa/fantasy-studio</span> → Settings → Secrets and variables → Actions → New repository secret. Crea <b>TELEGRAM_BOT_TOKEN</b> (el token) y <b>TELEGRAM_CHAT_ID</b> (el número).<br>
-          Y listo: el resumen llega solo cada mañana. Sin los secrets, simplemente no se envía nada.
+          Cada mañana a las 8:45 recibirás las subidas, bajadas y chollos del día. Configuración (una vez, 2 min):<br>
+          <b>1.</b> En Telegram, abre <a href="https://t.me/BotFather" target="_blank" rel="noopener" style="color:var(--acc)">@BotFather</a> y mándale: <b>/newbot</b> → de nombre <b>Fantasy Studio</b> → de usuario <b>NexoeeFantasyBot</b> (si está pillado, prueba <b>RandomFantasyStudioBot</b>). Te responderá con un <b>token</b> (algo como 1234567:AAF…). Cópialo.<br>
+          <b>2.</b> Pégalo en <a href="https://github.com/manugrraa/fantasy-studio/settings/secrets/actions/new" target="_blank" rel="noopener" style="color:var(--acc)">este formulario de GitHub</a> — Name: <b>TELEGRAM_BOT_TOKEN</b>, Secret: el token → Add secret.<br>
+          <b>3.</b> Mándale un «hola» a tu bot en Telegram (BotFather te dejó un enlace t.me a tu bot). El chat se detecta solo en el primer envío.<br>
+          Y ya está: el resumen llega cada mañana. El token solo lo ve GitHub Actions.
         </div>
       </details>
       <button class="btn-acc" style="width:100%" onclick="exportData()">Exportar mis datos</button>

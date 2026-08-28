@@ -2,10 +2,13 @@ name: Resumen diario Telegram
 
 on:
   schedule:
-    # 8:45 España (verano). El workflow de datos corre cada 15 min, así que a
-    # esta hora ya están los valores nuevos del día.
+    # 8:45 España (verano). Los valores del juego cambian de madrugada y el
+    # workflow de datos (cada 15 min) los captura antes de esta hora.
     - cron: "45 6 * * *"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   resumen:
@@ -22,3 +25,15 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scripts/resumen_telegram.py
+
+      - name: Guardar chat detectado
+        run: |
+          git config user.name "fantasy-studio-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/telegram_chat.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Sin chat nuevo que guardar"
+          else
+            git commit -m "telegram: chat detectado"
+            git push
+          fi

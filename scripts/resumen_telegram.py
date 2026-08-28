@@ -3,10 +3,12 @@
 
 Analiza los datos ya descargados en data/ (no llama a la API del Fantasy) y
 envia un mensaje con lo mas relevante del dia: subidas, bajadas, chollos y
-jornada. Necesita dos secrets del repositorio:
+jornada. Solo necesita UN secret del repositorio:
   TELEGRAM_BOT_TOKEN  (de @BotFather)
-  TELEGRAM_CHAT_ID    (tu chat con el bot)
-Sin secrets, imprime el mensaje y termina sin error (para probar en local).
+El chat id se detecta solo: la primera vez, el dueno le escribe un "hola" al
+bot y el script lo descubre via getUpdates y lo guarda en
+data/telegram_chat.json (el workflow lo commitea). TELEGRAM_CHAT_ID sigue
+funcionando como override opcional. Sin token, imprime el mensaje y sale.
 """
 import json
 import os
@@ -42,6 +44,48 @@ def sign(n):
     return ("+" if n > 0 else "") + fmt_m(n)
 
 
+def today_madrid_int():
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return int(datetime.now(ZoneInfo("Europe/Madrid")).strftime("%Y%m%d"))
+    except Exception:
+        return None
+
+
+def values_fresh(comp):
+    """True si el historico ya tiene el valor de HOY (el juego los cambia de madrugada)."""
+    today = today_madrid_int()
+    if not today:
+        return True
+    hist = load(f"history_{comp}.json", {})
+    for series in list(hist.values())[:80]:
+        if series and series[-1][0] >= today:
+            return True
+    return False
+
+
+def discover_chat(token):
+    """Chat id: primero el guardado; si no, getUpdates (el dueno saluda al bot una vez)."""
+    saved = load("telegram_chat.json", {})
+    if saved.get("chat_id"):
+        return str(saved["chat_id"])
+    try:
+        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getUpdates", timeout=30) as r:
+            data = json.load(r)
+        for upd in reversed(data.get("result", [])):
+            chat = ((upd.get("message") or upd.get("edited_message") or {}).get("chat")) or {}
+            if chat.get("id"):
+                cid = str(chat["id"])
+                with open(os.path.join(DATA, "telegram_chat.json"), "w", encoding="utf-8") as f:
+                    json.dump({"chat_id": cid, "name": chat.get("first_name") or chat.get("title") or ""}, f)
+                print("chat descubierto y guardado:", cid)
+                return cid
+    except Exception as e:
+        print("getUpdates fallo:", e, file=sys.stderr)
+    return None
+
+
 def analyze(comp):
     players = load(f"players_{comp}.json", [])
     hist = load(f"history_{comp}.json", {})
@@ -69,6 +113,8 @@ def analyze(comp):
 def main():
     meta = load("meta.json", {})
     lines = ["<b>⚡ Fantasy Studio — resumen del día</b>"]
+    if not values_fresh("2"):
+        lines.append("⏳ <i>Ojo: los valores de hoy aún no se habían publicado al enviar esto.</i>")
 
     for comp, label in COMPS:
         week = (meta.get("comps") or {}).get(comp) or {}
@@ -90,10 +136,15 @@ def main():
     msg = "\n".join(lines)
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat:
-        out = "(sin secrets de Telegram; mensaje que se habria enviado:)\n\n" + msg
+    if not token:
+        out = "(sin TELEGRAM_BOT_TOKEN; mensaje que se habria enviado:)\n\n" + msg
         sys.stdout.buffer.write(out.encode("utf-8", "replace"))
+        return
+
+    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip() or discover_chat(token)
+    if not chat:
+        print("Aun no se conoce el chat: escribele cualquier mensaje al bot en "
+              "Telegram y este workflow lo detectara en la proxima ejecucion.")
         return
 
     body = urllib.parse.urlencode({
