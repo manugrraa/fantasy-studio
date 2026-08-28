@@ -28,6 +28,13 @@ jobs:
       - name: Descargar datos de la API
         run: python scripts/update_data.py
 
+      - name: Alertas al instante (objetivos y plantilla)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FANTASY_SYNC_KEY: ${{ secrets.FANTASY_SYNC_KEY }}
+        run: python scripts/alertas_telegram.py
+
       - name: Publicar cambios
         run: |
           git config user.name "fantasy-studio-bot"

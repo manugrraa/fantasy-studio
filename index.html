@@ -1206,6 +1206,7 @@ function viewResumen(){
     <button class="card clickable" onclick="setView('stats')"><div class="qi">📊</div>Estadísticas</button>
     <button class="card clickable" onclick="setView('calendario')"><div class="qi">📅</div>Calendario</button>
   </div>
+  ${wealthCard(c)}
   <div class="section-title">Mi economía</div>
   <div class="stat-grid">
     ${statTile("Valor plantilla", fmtM(st.current) + " €", st.n + (st.n===1?" jugador":" jugadores"))}
@@ -1663,11 +1664,60 @@ function scatterHtml(c){
   </div>`;
 }
 
+/* Calendario fácil: qué equipos tienen las próximas jornadas más asequibles.
+   Ficha jugadores de los de arriba ANTES de que su valor suba. */
+function fixtureHtml(c){
+  const full = state.calFull[c];
+  const cur = state.meta?.comps?.[c]?.weekNumber || 1;
+  if (!full?.weeks) return `<div class="card"><div class="empty-state">Sin calendario todavía</div></div>`;
+  const N = 4;
+  const strengths = {};
+  const teamIds = [...new Set((state.players[c] || []).map(p => String(p.teamId)))];
+  for (const t of teamIds) strengths[t] = teamStrength(c, t);
+  const avg = teamIds.reduce((a, t) => a + strengths[t], 0) / (teamIds.length || 1);
+
+  const rows = teamIds.map(tid => {
+    const team = state.teams.get(tid);
+    const next = [];
+    for (let w = cur; w < cur + N + 2 && next.length < N; w++) {
+      for (const m of full.weeks[String(w)] || []) {
+        if (String(m.localId) === tid || String(m.visitorId) === tid) {
+          const home = String(m.localId) === tid;
+          const rivId = String(home ? m.visitorId : m.localId);
+          const s = (strengths[rivId] ?? avg) + (home ? -0.5 : 0.5); // fuera pesa más
+          next.push({ riv: state.teams.get(rivId), home, s, w });
+          break;
+        }
+      }
+    }
+    if (!next.length) return null;
+    const score = next.reduce((a, x) => a + x.s, 0) / next.length;
+    return { tid, team, next, score };
+  }).filter(Boolean).sort((a, b) => a.score - b.score);
+
+  const dot = s => s < avg - 0.8 ? "🟢" : s > avg + 0.8 ? "🔴" : "🟡";
+  return `
+  <div class="card" style="padding:11px 14px;margin-bottom:10px;font-size:12px;color:var(--text-2);line-height:1.55">
+    📅 Próximas ${N} jornadas ordenadas de <b>más fácil a más difícil</b>. Los jugadores de los equipos
+    de arriba tienen papeletas de puntuar (y subir de valor): fíchalos <b>antes</b>.
+  </div>
+  <div class="card">${rows.map((r, i) => `
+    <div class="p-row" style="cursor:default">
+      <span class="rival-pos ${i < 3 ? "me" : ""}">${i + 1}</span>
+      <img src="${esc(r.team?.badgeColor || "")}" alt="" style="width:26px;height:26px;object-fit:contain" loading="lazy" onerror="this.style.display='none'">
+      <div class="p-main">
+        <div class="p-name">${esc(r.team?.name || "?")}</div>
+        <div class="p-meta" style="gap:8px">${r.next.map(x => `<span>${x.home ? "🏠" : "✈️"} ${esc(x.riv?.shortName || "?")} ${dot(x.s)}</span>`).join("")}</div>
+      </div>
+      <button class="btn-ghost" style="padding:6px 11px;font-size:11px" onclick="state.filters={q:'',pos:'',team:'${r.tid}',sort:'ppm',watchOnly:false,favOnly:false,limit:100};setView('mercado')">Ver jugadores</button>
+    </div>`).join("")}</div>`;
+}
+
 function viewStats(){
   const c = comp();
   const tab = state.statsTab;
   const chips = `<div class="chips-row no-scrollbar">
-    ${[["clasificacion","Clasificación"],["equipos","Equipos"],["rankings","Rankings"],["mapa","🗺 Mapa valor-puntos"]].map(([id,l]) =>
+    ${[["clasificacion","Clasificación"],["equipos","Equipos"],["rankings","Rankings"],["mapa","🗺 Mapa valor-puntos"],["fixture","📅 Calendario fácil"]].map(([id,l]) =>
       `<button class="chip ${tab===id?"active":""}" onclick="state.statsTab='${id}';render()">${l}</button>`).join("")}
   </div>`;
 
@@ -1695,6 +1745,8 @@ function viewStats(){
     }
   } else if (tab === "mapa") {
     body = scatterHtml(c);
+  } else if (tab === "fixture") {
+    body = fixtureHtml(c);
   } else if (tab === "equipos") {
     const teamIds = [...new Set((state.players[c]||[]).map(p => String(p.teamId)))];
     const rows = teamIds.map(id => {
@@ -2423,6 +2475,49 @@ function openPicker(){
 /* =====================================================================
    VISTA: MOVIMIENTOS
    ===================================================================== */
+/* Modo entrenador: nota a tus decisiones de compra/venta usando el histórico */
+function coachCard(c){
+  const sells = state.moves[c].filter(m => m.type === "sell" && m.pid && m.price);
+  if (sells.length < 2) return "";
+  const n1 = v => (+v).toLocaleString("es-ES", { maximumFractionDigits: 1 });
+  let withProfit = 0, timingSum = 0, timingN = 0, tableMoney = 0;
+  let best = null, worst = null;
+  for (const m of sells) {
+    if (m.profit != null) {
+      if (m.profit > 0) withProfit++;
+      if (!best || m.profit > best.profit) best = m;
+      if (!worst || m.profit < worst.profit) worst = m;
+    }
+    // timing: ¿vendiste cerca del pico que tocó entre la compra y la venta?
+    const h = (state.history[c] || {})[String(m.pid)];
+    const sellInt = m.date ? +m.date.replace(/-/g, "") : null;
+    if (h && sellInt) {
+      const upto = h.filter(e => e[0] <= sellInt);
+      if (upto.length > 2) {
+        const peak = Math.max(...upto.slice(-60).map(e => e[1]));
+        if (peak > 0) { timingSum += m.price / peak; timingN++; tableMoney += Math.max(0, peak - m.price); }
+      }
+    }
+  }
+  const okPct = sells.filter(m => m.profit != null).length ? withProfit / sells.filter(m => m.profit != null).length : 0;
+  const timing = timingN ? timingSum / timingN : null;
+  const nota = Math.round(Math.min(10, Math.max(0, okPct * 6 + (timing || 0.7) * 4)) * 10) / 10;
+  const lesson = timing == null ? "" : timing >= 0.93 ? "Vendes muy cerca del pico: ojo de mercado fino. 👌"
+    : timing >= 0.8 ? `Sueles vender al ${Math.round(timing * 100)} % del pico: aguanta un pelín más las subidas.`
+    : `Vendes pronto (al ${Math.round(timing * 100)} % del pico): te has dejado ~${fmtM(tableMoney)} en la mesa.`;
+  return `<div class="section-title">🎓 Modo entrenador</div>
+  <div class="card" style="padding:13px 15px;margin-bottom:14px;font-size:12.5px;line-height:1.6;color:var(--text-2)">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+      <span style="font-family:'Sora',sans-serif;font-size:26px;font-weight:800;color:var(--acc)">${n1(nota)}</span>
+      <span style="font-size:11px;color:var(--text-3)">nota de tus ${sells.length} ventas<br>(beneficio + puntería con el pico)</span>
+    </div>
+    ✅ ${Math.round(okPct * 100)} % de tus ventas con beneficio.
+    ${lesson ? "<br>📐 " + lesson : ""}
+    ${best && best.profit > 0 ? `<br>🏆 Mejor: <b>${esc(best.name)}</b> ${fmtMSign(best.profit)}.` : ""}
+    ${worst && worst.profit < 0 ? ` 💀 Peor: <b>${esc(worst.name)}</b> ${fmtMSign(worst.profit)}.` : ""}
+  </div>`;
+}
+
 function viewMovs(){
   const c = comp();
   const moves = [...state.moves[c]].sort((a,b) => (b.date||"").localeCompare(a.date||"") || b.id.localeCompare(a.id));
@@ -2456,6 +2551,7 @@ function viewMovs(){
     ${statTile("Beneficio realizado", `<span class="${cls(realized)}">${fmtMSign(realized)}</span>`, "")}
     ${statTile("ROI de ventas", `<span class="${cls(realized)}">${sells.length && totalSell-realized > 0 ? (realized/(totalSell-realized)*100).toLocaleString("es-ES",{maximumFractionDigits:1}) + " %" : "—"}</span>`, "sobre lo invertido")}
   </div>
+  ${coachCard(c)}
   <div class="chips-row no-scrollbar">
     <button class="chip ${f==="all"?"active":""}" onclick="state.moveFilter='all';render()">Todos</button>
     <button class="chip ${f==="buy"?"active":""}" onclick="state.moveFilter='buy';render()">Compras</button>
@@ -2716,8 +2812,46 @@ async function loadLiga(force){
   st.data[c] = out;
   st.errors = errs;
   st.loading = false;
+  snapshotWealth(c);
   scheduleSync(); // sube dinero/plantilla frescos a la nube personal
   if (state.view === "liga") render();
+}
+
+/* diario de patrimonio: dinero real + valor de mi equipo real, una foto al día */
+function snapshotWealth(c){
+  const d = state.liga.data[c];
+  const money = ligaMoney(d?.money);
+  const myId = state.myLeague[c]?.teamId;
+  if (money == null || !myId || !d?.standing) return;
+  const row = d.standing.find(r => String((r.team || r).id) === String(myId));
+  const teamVal = row ? +((row.team || row).teamValue || 0) : 0;
+  if (!teamVal && !money) return;
+  const t = +new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" }).replace(/-/g, "");
+  const all = load("fs_wealth_hist", {});
+  const arr = all[c] || (all[c] = []);
+  const total = money + teamVal;
+  if (!arr.length || arr[arr.length - 1][0] < t) arr.push([t, total, money, teamVal]);
+  else arr[arr.length - 1] = [t, total, money, teamVal];
+  if (arr.length > 400) arr.splice(0, arr.length - 400);
+  try { localStorage.setItem("fs_wealth_hist", JSON.stringify(all)); } catch(e){}
+}
+
+function wealthCard(c){
+  const arr = load("fs_wealth_hist", {})[c];
+  if (!arr || arr.length < 2) return "";
+  const last = arr[arr.length - 1];
+  const d7 = seriesDelta7(arr.map(e => [e[0], e[1]]));
+  const d0 = last[1] - arr[0][1];
+  return `<div class="section-title">📈 Mi patrimonio (dinero + equipo real)</div>
+  <div class="card" style="padding:13px 15px;margin-bottom:4px">
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+      <span style="font-family:'Sora',sans-serif;font-size:22px;font-weight:800">${fmtM(last[1])} €</span>
+      ${d7 != null ? `<span class="delta-pill ${cls(d7)}">${fmtMSign(d7)} · 7d</span>` : ""}
+      <span class="delta-pill ${cls(d0)}">${fmtMSign(d0)} · total</span>
+    </div>
+    ${sparkline(arr.map(e => [e[0], e[1]]), 0)}
+    <div style="font-size:10.5px;color:var(--text-3);margin-top:5px">dinero ${fmtM(last[2])} + equipo ${fmtM(last[3])} · se anota solo cada día que abres Mi Liga</div>
+  </div>`;
 }
 
 function ligaMoney(m){
@@ -2954,10 +3088,39 @@ function openBidModal(marketId, pidStr, price, myBid){
         ${money != null ? `<br>Tu dinero: <b>${fmt(money)}</b>` : ""}
       </div>
       ${moneyInput("bidAmount", "Tu puja", myBid ? +myBid.money : +price, "La puja más alta se lleva al jugador cuando expire el mercado")}
+      <div id="bidSim" style="margin-bottom:12px"></div>
       <button class="btn-acc" style="width:100%" id="bidGo">${myBid ? "Guardar puja" : "Confirmar puja"}</button>
       ${myBid?.id ? `<button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" id="bidCancel">Retirar mi puja</button>` : ""}
     </div>`, ov => {
       bindMoney(ov.querySelector("#bidAmount"));
+      // simulador: ¿a quién superas con esta cantidad?
+      const simEl = ov.querySelector("#bidSim");
+      const simulate = () => {
+        if (!simEl) return;
+        const amount = moneyVal(ov.querySelector("#bidAmount"));
+        const B = computeBudgets(c);
+        if (!amount || !B) { simEl.innerHTML = B ? "" : `<div style="font-size:11px;color:var(--text-3)">Abre la pestaña Rivales una vez para activar el simulador de puja.</div>`; return; }
+        const ratios = bidRatios(c);
+        const pRef = state.byId[c].get(String(pidStr));
+        const refVal = pRef ? pVal(pRef) : +price;
+        const rivals = B.rows.filter(r => !r.isMe).map(r => {
+          const cash = maxCash(r);
+          const est = Math.max(+price, Math.round(refVal * (ratios[r.tid] || 1.08)));
+          return { name: r.manager || r.name, cash, est: Math.min(est, cash), afford: cash >= +price };
+        }).filter(r => r.afford);
+        const beaten = rivals.filter(r => amount > r.est).length;
+        const risky = rivals.filter(r => amount <= r.est);
+        const verdict = !rivals.length ? ["🟢", "Nadie más puede permitírselo: puja mínima y listo."]
+          : beaten === rivals.length ? ["🟢", `Superarías la puja típica de los ${rivals.length} rivales con dinero.`]
+          : beaten >= rivals.length - 1 ? ["🟡", `Ajustada: ${risky.map(r => esc(r.name)).join(", ")} suele llegar a ~${fmtM(risky[0].est)}.`]
+          : ["🔴", `Arriesgada: ${risky.length} rivales suelen pujar por encima (${risky.slice(0,2).map(r => esc(r.name) + " ~" + fmtM(r.est)).join(", ")}).`];
+        simEl.innerHTML = `<div class="card" style="padding:10px 13px;font-size:11.5px;color:var(--text-2);line-height:1.55">
+          ${verdict[0]} ${verdict[1]}
+          <div style="color:var(--text-3);margin-top:4px">Estimación por caja y patrón de pujas de cada rival — orientativa, no una promesa.</div>
+        </div>`;
+      };
+      ov.querySelector("#bidAmount").addEventListener("input", simulate);
+      simulate();
       ov.querySelector("#bidGo").addEventListener("click", () => {
         const amount = moneyVal(ov.querySelector("#bidAmount"));
         if (!amount || amount < +price) { toast("La puja debe ser al menos el precio de salida", "err"); return; }
@@ -3177,7 +3340,7 @@ function viewLiga(){
       ${diagHtml()}`;
   }
 
-  const TABS = [["mercado","Mercado del día"],["pujas","Mis pujas"],["ventas","Mis ventas"],["equipo","Mi equipo"],["once","Once ideal"],["rivales","Rivales"],["actividad","Actividad"]];
+  const TABS = [["mercado","Mercado del día"],["pujas","Mis pujas"],["ventas","Mis ventas"],["equipo","Mi equipo"],["once","Once ideal"],["clausulas","🔓 Cláusulas"],["rivales","Rivales"],["actividad","Actividad"]];
   const tabsHtml = `<div class="chips-row no-scrollbar" style="margin-bottom:12px">${TABS.map(([id,l]) =>
     `<button class="chip ${state.ligaTab === id ? "active" : ""}" onclick="state.ligaTab='${id}';render()">${l}</button>`).join("")}</div>`;
 
@@ -3187,6 +3350,7 @@ function viewLiga(){
   else if (state.ligaTab === "ventas") body = ligaTabVentas(c, d);
   else if (state.ligaTab === "equipo") body = ligaTabEquipo(c, d);
   else if (state.ligaTab === "once") body = ligaTabOnce(c, d);
+  else if (state.ligaTab === "clausulas") body = ligaTabClausulas(c, d);
   else if (state.ligaTab === "rivales") body = ligaTabRivales(c, d);
   else body = ligaTabActividad(c, d);
 
@@ -3452,6 +3616,143 @@ function rejectOfferUI(i){
   const marketId = off.marketId ?? off.market?.id;
   ligaAction("Oferta rechazada", () =>
     authFetch(`/api/v1/competition/${c}/league/${L}/market/${marketId}/offer/${off.id}/reject?x-lang=es`, { method: "POST" }));
+}
+
+/* --- cláusulas: peligro para las mías y oportunidades en las suyas --- */
+async function loadAllRivalTeams(c){
+  const d = state.liga.data[c];
+  const sel = state.myLeague[c];
+  if (!d?.standing || !sel) return;
+  const cache = state.rivalTeams[c] || (state.rivalTeams[c] = {});
+  if (cache._all) return;
+  for (const r of d.standing) {
+    const tid = String((r.team || r).id ?? "");
+    if (!tid || tid === String(sel.teamId) || cache[tid]) continue;
+    try { cache[tid] = await authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/teams/${tid}?x-lang=es`); }
+    catch(e) { cache[tid] = { error: e.message }; }
+  }
+  cache._all = true;
+  if (state.view === "liga") render();
+}
+
+function maxCash(r){ return r.budget + (r.teamValue ? Math.round(r.teamValue * 0.2) : 0); }
+
+/* patrón de puja por equipo: cuánto suelen pagar sobre el valor de mercado
+   del día (de las compras del historial); 1.08 por defecto, tope 1..2 */
+function bidRatios(c){
+  const act = state.actFull[c];
+  const out = {};
+  if (!act || !act.done) return out;
+  const maps = managerMaps(c);
+  const acc = {};
+  for (const raw of act.items) {
+    const a = parseAct(raw);
+    if (a.type !== 1 && a.type !== 31) continue;
+    if (!a.pid || a.money == null || !a.date) continue;
+    const tid = actTeam(a, maps, 1);
+    if (!tid) continue;
+    const dayVal = histValueAt(c, a.pid, +String(a.date).slice(0, 10).replace(/-/g, ""));
+    if (!dayVal) continue;
+    const ratio = Math.min(2, Math.max(1, Math.abs(+a.money) / dayVal));
+    (acc[tid] = acc[tid] || []).push(ratio);
+  }
+  for (const tid in acc) out[tid] = acc[tid].reduce((x, y) => x + y, 0) / acc[tid].length;
+  return out;
+}
+
+function ligaTabClausulas(c, d){
+  const act = state.actFull[c];
+  if (!act || !act.done) {
+    if (!act || !act.loading) setTimeout(() => loadFullActivity(c), 30);
+    return `<div class="card"><div class="empty-state"><div class="big">🔓</div>Calculando presupuestos de la liga…</div></div>`;
+  }
+  const B = computeBudgets(c);
+  if (!B) return `<div class="card"><div class="empty-state">Sin clasificación todavía</div></div>`;
+  const cache = state.rivalTeams[c] || {};
+  if (!cache._all) {
+    setTimeout(() => loadAllRivalTeams(c), 30);
+    return `<div class="card"><div class="empty-state"><div class="big">🔓</div>Leyendo las cláusulas de todos los equipos…</div></div>`;
+  }
+  const money = ligaMoney(d.money);
+  const myReach = money != null ? money + Math.round((B.rows.find(r => r.isMe)?.teamValue || 0) * 0.2) : null;
+
+  // 1) mis jugadores en peligro: cláusula al alcance de algún rival
+  const myPlayers = d.team ? (d.team.players || d.team.playerTeams || []) : [];
+  const rivals = B.rows.filter(r => !r.isMe);
+  const danger = [];
+  for (const x of myPlayers) {
+    const clause = x.buyoutClause;
+    if (clause == null) continue;
+    const pm = x.playerMaster || x.player || x;
+    const threats = rivals.filter(r => maxCash(r) >= +clause).sort((a, b) => maxCash(b) - maxCash(a));
+    if (threats.length) danger.push({ pm, clause: +clause, threats });
+  }
+  danger.sort((a, b) => a.clause - b.clause);
+
+  // 2) cláusulas de rivales a mi alcance (chollo si cláusula < valor de mercado)
+  const chances = [];
+  for (const r of rivals) {
+    const team = cache[r.tid];
+    if (!team || team.error) continue;
+    for (const x of (team.players || team.playerTeams || [])) {
+      const clause = x.buyoutClause;
+      if (clause == null || myReach == null || +clause > myReach) continue;
+      const pm = x.playerMaster || x.player || x;
+      const local = state.byId[c].get(String(pm.id ?? ""));
+      const val = local ? pVal(local) : (pm.marketValue != null ? +pm.marketValue : null);
+      chances.push({ pm, x, clause: +clause, val, owner: r.manager || r.name, ratio: val != null ? val / +clause : 0 });
+    }
+  }
+  chances.sort((a, b) => b.ratio - a.ratio);
+
+  return `
+  <div class="card" style="padding:11px 14px;margin-bottom:12px;font-size:12px;color:var(--text-2);line-height:1.55">
+    Alcance = dinero + deuda permitida (20% del valor de plantilla).${money != null ? ` El tuyo: <b style="color:var(--acc)">${fmtM(myReach)} €</b>.` : ""}
+  </div>
+  <div class="section-title">🚨 Tus jugadores en peligro (${danger.length})</div>
+  ${danger.length ? `<div class="card">${danger.map(dd => ligaPlayerRow(dd.pm, `<div class="p-right">
+      <div class="p-val">${fmtM(dd.clause)} €</div>
+      <div class="p-sub" style="color:var(--red)">al alcance de ${dd.threats.slice(0,2).map(t => esc(t.manager || t.name)).join(", ")}${dd.threats.length > 2 ? " +" + (dd.threats.length - 2) : ""}</div>
+    </div>`)).join("")}</div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px;padding:0 4px">Súbeles la cláusula desde la app oficial si no quieres perderlos.</div>`
+    : `<div class="card" style="padding:14px;font-size:12.5px;color:var(--green)">✅ Ninguna de tus cláusulas está al alcance de un rival ahora mismo.</div>`}
+
+  <div class="section-title">🎯 Cláusulas a tu alcance (${chances.length})</div>
+  ${chances.length ? `<div class="card">${chances.slice(0, 25).map((ch, i) => ligaPlayerRow(ch.pm, `<div class="p-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
+      <div><span class="p-val">${fmtM(ch.clause)} €</span>
+        <div class="p-sub">${ch.val != null ? "vale " + fmtM(ch.val) + (ch.ratio >= 1.15 ? " · <b class='up'>chollo</b>" : "") : ""} · de ${esc(ch.owner)}</div></div>
+      <button class="btn-ghost" style="padding:6px 11px;font-size:11.5px" onclick="event.stopPropagation();payClauseUI(${i})">Pagar cláusula</button>
+    </div>`)).join("")}</div>` : `<div class="card" style="padding:14px;font-size:12.5px;color:var(--text-3)">Ninguna cláusula rival te resulta pagable ahora.</div>`}`;
+}
+
+function payClauseUI(i){
+  const c = comp();
+  const d = state.liga.data[c];
+  // reconstruye la lista con el mismo orden que pinta la pestaña
+  const B = computeBudgets(c);
+  const cache = state.rivalTeams[c] || {};
+  const money = ligaMoney(d.money);
+  const myReach = money != null ? money + Math.round((B.rows.find(r => r.isMe)?.teamValue || 0) * 0.2) : null;
+  const chances = [];
+  for (const r of B.rows.filter(r => !r.isMe)) {
+    const team = cache[r.tid];
+    if (!team || team.error) continue;
+    for (const x of (team.players || team.playerTeams || [])) {
+      if (x.buyoutClause == null || myReach == null || +x.buyoutClause > myReach) continue;
+      const pm = x.playerMaster || x.player || x;
+      const local = state.byId[c].get(String(pm.id ?? ""));
+      const val = local ? pVal(local) : (pm.marketValue != null ? +pm.marketValue : null);
+      chances.push({ pm, clause: +x.buyoutClause, val, ratio: val != null ? val / +x.buyoutClause : 0 });
+    }
+  }
+  chances.sort((a, b) => b.ratio - a.ratio);
+  const ch = chances[i];
+  if (!ch) return;
+  if (!confirm(`⚠️ ¿PAGAR la cláusula de ${ch.pm.nickname} por ${fmt(ch.clause)}? Se ficha al instante en tu liga REAL, el dinero sale de tu cuenta y NO se puede deshacer.`)) return;
+  if (!confirm(`Última confirmación: ${ch.pm.nickname} por ${fmt(ch.clause)}. ¿Seguro?`)) return;
+  const L = state.myLeague[c].leagueId;
+  ligaAction("Cláusula pagada — fichado", () =>
+    authFetch(`/api/v1/competition/${c}/league/${L}/buyout/${ch.pm.id}/pay`, { method: "POST", body: { buyoutClauseToPay: ch.clause } }));
 }
 
 /* --- pestaña: rivales (presupuestos, equipos y profit) --- */
