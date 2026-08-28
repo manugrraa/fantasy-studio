@@ -356,6 +356,11 @@
   .modal-head h3 { flex: 1; font-size: 16px; font-weight: 700; min-width: 0; }
   .modal-body { padding: 16px 18px calc(20px + env(safe-area-inset-bottom)); }
   .modal-close { width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; background: var(--card); border: 1px solid var(--border); color: var(--text-2); flex-shrink: 0; }
+  .modal.lg { max-width: 700px; }
+  .mini-stats.big { gap: 9px; }
+  .mini-stats.big .mini-stat { padding: 14px 6px 12px; border-radius: 13px; }
+  .mini-stats.big .mini-stat .n { font-size: 22px; }
+  .mini-stats.big .mini-stat .l { font-size: 9.5px; margin-top: 3px; }
 
   .field { margin-bottom: 14px; }
   .field label { display: block; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--text-3); margin-bottom: 6px; }
@@ -1053,9 +1058,9 @@ function toast(msg, kind){
 }
 
 /* ---------- modales ---------- */
-function openModal(html, onMount){
+function openModal(html, onMount, cls){
   const root = document.getElementById("modalRoot");
-  root.innerHTML = `<div class="modal-overlay" id="mOverlay"><div class="modal">${html}</div></div>`;
+  root.innerHTML = `<div class="modal-overlay" id="mOverlay"><div class="modal ${cls || ""}">${html}</div></div>`;
   const ov = document.getElementById("mOverlay");
   ov.addEventListener("click", e => { if (e.target === ov) closeModal(); });
   document.body.style.overflow = "hidden";
@@ -2081,7 +2086,7 @@ function openPlayer(pid){
   const maxAbs = Math.max(4, ...wp.map(w => Math.abs(w.points || 0)));
   const bars = wp.slice(-10).map(w => {
     const pts = w.points || 0;
-    const h = Math.max(3, Math.abs(pts)/maxAbs*54);
+    const h = Math.max(3, Math.abs(pts)/maxAbs*64);
     const color = pts < 0 ? "var(--red)" : pts >= 10 ? "var(--acc)" : pts >= 5 ? "var(--green)" : "var(--text-3)";
     return `<div class="bar-col"><div class="bar-val">${pts}</div><div class="bar" style="height:${h}px;background:${color}"></div><div class="bar-lbl">J${w.weekNumber}</div></div>`;
   }).join("");
@@ -2153,55 +2158,18 @@ function openPlayer(pid){
   }
 
   window._modalPid = String(pid);
-  const tab = window._pdTab || "resumen";
-  const pdTabs = [["resumen","Resumen"],["graficas","Gráficas"],["datos","Datos"]];
   const fav = isFav(pid);
-
-  let tabBody = "";
-  if (tab === "resumen") {
-    tabBody = `
-      <div class="mini-stats">
-        ${miniStat(p.points ?? 0, "Puntos")}
-        ${miniStat((p.averagePoints ?? 0).toLocaleString("es-ES",{maximumFractionDigits:1}), "Media")}
-        ${miniStat(form3(p).toLocaleString("es-ES",{maximumFractionDigits:1}), "Forma 3j")}
-        ${miniStat(ppm(p).toLocaleString("es-ES",{maximumFractionDigits:1}), "Pts/M€")}
-      </div>
-      ${ownHtml}
-      ${sigHtml}`;
-  } else if (tab === "graficas") {
-    tabBody = `
-      <div class="chart-card">
-        <div class="chart-head"><h4>Valor de mercado</h4>
-          <div class="seg">
-            ${[[7,"7D"],[30,"1M"],[0,"Todo"]].map(([n,l]) => `<button class="${(window._chartRange ?? 0)===n?"sel":""}" onclick="setChartRange(${n})">${l}</button>`).join("")}
-          </div>
-        </div>
-        <div id="valueChart">${sparkline(hist, window._chartRange ?? 0, projectValue(c, pid))}</div>
-        <div style="font-size:10.5px;color:var(--text-3);margin-top:2px">⇢ punteado: proyección a 7 días${(() => { const pv = projectValue(c, pid); return pv != null ? " (~" + fmtM(pv) + " €)" : ""; })()}</div>
-        ${recHtml}
-      </div>
-      ${wp.length ? `<div class="chart-card"><h4>Puntos por jornada</h4><div class="bars">${bars}</div></div>` : ""}`;
-  } else {
-    tabBody = `
-      ${seasonHtml || `<div class="chart-card" style="color:var(--text-3);font-size:12px">Las estadísticas de temporada se descargan cada madrugada.</div>`}
-      <div class="chart-card"><h4>Posición en la liga</h4>
-        <div class="mini-stats" style="margin:0">
-          ${miniStat("nº " + rankPts, "En puntos")}
-          ${miniStat("nº " + rankVal, "En valor")}
-          ${(() => { const s = starterProb(c, pid); return miniStat(s && s.weeks ? Math.round(s.prob * 100) + " %" : "—", "Titularidad"); })()}
-          ${miniStat(p.lastSeasonPoints ?? "—", "Pts 24/25")}
-        </div>
-      </div>`;
-  }
+  const range = window._chartRange ?? 30;
+  const dir7 = d.d7 > 0 ? `<span class="up">▲ subiendo</span>` : d.d7 < 0 ? `<span class="down">▼ bajando</span>` : `<span style="color:var(--text-3)">estable</span>`;
 
   openModal(`
     ${modalHead(esc(p.nickname))}
     <div class="modal-body">
       <div class="pd-hero">
         <div class="pd-head" style="margin-bottom:12px">
-          <img class="pd-photo" style="width:92px;height:92px" src="${esc(p.image)}" alt="" onerror="this.style.visibility='hidden'">
+          <img class="pd-photo" style="width:104px;height:104px" src="${esc(p.image)}" alt="" onerror="this.style.visibility='hidden'">
           <div style="flex:1;min-width:0">
-            <div class="pd-name" style="font-size:22px">${esc(p.nickname)} ${fav ? "⭐" : ""}</div>
+            <div class="pd-name" style="font-size:24px">${esc(p.nickname)} ${fav ? "⭐" : ""}</div>
             <div class="pd-team" style="margin-top:6px">
               <span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
               ${t ? `<img src="${esc(t.badgeColor)}" alt=""> ${esc(t.name)}` : ""}
@@ -2216,17 +2184,43 @@ function openPlayer(pid){
           </div>
         </div>
         <div class="pd-value-row">
-          <div class="pd-value" style="font-size:30px">${fmt(val)}</div>
-          <span style="font-size:20px;vertical-align:5px">${trendIcon(d.d1)}</span>
+          <div class="pd-value" style="font-size:34px">${fmt(val)}</div>
+          <span style="font-size:22px;vertical-align:6px">${trendIcon(d.d1)}</span>
         </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">${chips}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${chips}</div>
       </div>
 
-      <div class="chips-row no-scrollbar" style="margin-bottom:12px">
-        ${pdTabs.map(([id,l]) => `<button class="chip ${tab === id ? "active" : ""}" onclick="setPdTab('${id}')">${l}</button>`).join("")}
+      <div class="mini-stats big">
+        ${miniStat(`<span style="color:var(--acc)">${p.points ?? 0}</span>`, "Puntos")}
+        ${miniStat((p.averagePoints ?? 0).toLocaleString("es-ES",{maximumFractionDigits:1}), "Media/jornada")}
+        ${miniStat(form3(p).toLocaleString("es-ES",{maximumFractionDigits:1}), "Forma 3j")}
+        ${miniStat(ppm(p).toLocaleString("es-ES",{maximumFractionDigits:1}), "Pts/M€")}
       </div>
 
-      ${tabBody}
+      ${ownHtml}
+
+      <div class="chart-card">
+        <div class="chart-head"><h4>Valor de mercado · ${dir7}</h4>
+          <div class="seg">
+            ${[[7,"7D"],[30,"1M"],[0,"Todo"]].map(([n,l]) => `<button class="${range===n?"sel":""}" onclick="setChartRange(${n})">${l}</button>`).join("")}
+          </div>
+        </div>
+        <div id="valueChart">${sparkline(hist, range, projectValue(c, pid))}</div>
+        <div style="font-size:10.5px;color:var(--text-3);margin-top:2px">⇢ punteado: proyección a 7 días${(() => { const pv = projectValue(c, pid); return pv != null ? " (~" + fmtM(pv) + " €)" : ""; })()}</div>
+        ${recHtml}
+      </div>
+
+      ${wp.length ? `<div class="chart-card"><h4>Puntos por jornada</h4><div class="bars" style="height:88px">${bars}</div></div>` : ""}
+      ${sigHtml}
+      ${seasonHtml}
+      <div class="chart-card"><h4>Posición en la liga</h4>
+        <div class="mini-stats" style="margin:0">
+          ${miniStat("nº " + rankPts, "En puntos")}
+          ${miniStat("nº " + rankVal, "En valor")}
+          ${(() => { const s = starterProb(c, pid); return miniStat(s && s.weeks ? Math.round(s.prob * 100) + " %" : "—", "Titularidad"); })()}
+          ${miniStat(p.lastSeasonPoints ?? "—", "Pts 24/25")}
+        </div>
+      </div>
 
       <div class="modal-actions">
         ${entry
@@ -2241,11 +2235,7 @@ function openPlayer(pid){
            href="https://www.sofascore.com/es/search?q=${encodeURIComponent(p.nickname)}">
            ${IC.ext.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Sofascore</a>
       </div>
-    </div>`);
-}
-function setPdTab(t){
-  window._pdTab = t;
-  if (window._modalPid) openPlayer(window._modalPid);
+    </div>`, null, "lg");
 }
 
 /* historial de copias diarias en la nube: restaurar a cualquier fecha */
@@ -4144,8 +4134,9 @@ function syncDraftPlayers(c){
   }
 }
 
-function ligaPlayerRow(pm, right){
+function ligaPlayerRow(pm, right, opts){
   // fila de jugador de la liga: usa nuestra ficha si el jugador está en la BD local
+  opts = opts || {};
   const c = comp();
   const pid = String(pm?.id ?? "");
   const local = state.byId[c]?.get(pid);
@@ -4153,13 +4144,19 @@ function ligaPlayerRow(pm, right){
   const img = pm?.images?.transparent?.["256x256"] || pm?.image || local?.image || "";
   const pos = POS[String(pm?.positionId ?? local?.positionId ?? "3")] || POS["3"];
   const t = local ? teamOf(local) : null;
+  const d = opts.trend && local ? deltas(c, pid) : null;
+  const trendHtml = d ? `<div class="p-meta" style="margin-top:3px">${trendIcon(d.d1)}
+      <span class="delta-pill ${cls(d.d1)}">${d.d1 ? fmtMSign(d.d1) : "="} hoy</span>
+      <span class="delta-pill ${cls(d.d7)}">${fmtMSign(d.d7)} · 7d</span></div>` : "";
   return `<div class="p-row" ${local ? `onclick="openPlayer('${pid}')"` : ""}>
     <img class="p-photo" loading="lazy" src="${esc(img)}" alt="" onerror="this.style.visibility='hidden'">
     <div class="p-main">
       <div class="p-name">${esc(name)}</div>
       <div class="p-meta"><span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
-        ${t ? `<img src="${esc(t.badgeColor)}" alt="" loading="lazy"> ${esc(t.shortName || t.name)}` : ""}</div>
+        ${t ? `<img src="${esc(t.badgeColor)}" alt="" loading="lazy"> ${esc(t.shortName || t.name)}` : ""}${opts.trend && local ? ` · ${local.points ?? 0} pts` : ""}</div>
+      ${trendHtml}
     </div>
+    ${opts.trend && local ? miniSpark(c, pid, 30) : ""}
     ${right || ""}
   </div>`;
 }
@@ -4334,7 +4331,7 @@ function ligaTabMercado(c, d){
       <div style="display:flex;align-items:center;gap:6px">${gangaHtml}<span class="p-val">${fmtM(+price)} €</span></div>
       <div class="p-sub">${bids != null ? bids + (bids === 1 ? " puja" : " pujas") : ""}${sellerName ? " · " + esc(sellerName) : ""}${exp ? " · hasta " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}${mv ? " · vale " + fmtM(mv) : ""}</div>
       ${btn}
-    </div>`) + biddersHtml;
+    </div>`, { trend: true }) + biddersHtml;
   }).join("")}</div>`;
 }
 
@@ -4941,15 +4938,16 @@ function ligaTabDirecto(c, d){
       liveTable = `<div class="section-title">Clasificación en vivo (estimada)</div>
       <div class="card">${rows.map((r, i) => {
         const moved = r.pos - (i + 1);
-        return `<div class="p-row" style="cursor:default">
+        return `<div class="p-row" onclick="openRivalLive('${r.tid}')">
           <span class="rival-pos ${r.isMe ? "me" : ""}">${i + 1}</span>
           <div class="p-main"><div class="p-name">${esc(r.manager || r.name)}${r.isMe ? ` <span class="badge acc" style="padding:1px 6px;font-size:9px">YO</span>` : ""}</div>
             <div class="p-meta">J${wn}: <b class="${r.jpts >= 40 ? "up" : ""}">+${r.jpts}</b>${moved ? ` · ${moved > 0 ? "▲" : "▼"}${Math.abs(moved)}` : ""}</div></div>
           <div class="p-right"><div class="p-val">${nfES.format(r.total)}</div><div class="p-sub">pts totales</div></div>
+          <span style="color:var(--text-3);margin-left:2px">›</span>
         </div>`;
       }).join("")}</div>
       <div style="font-size:10.5px;color:var(--text-3);margin-top:8px;padding:0 4px">
-        Estimación con las 11 mejores puntuaciones de cada plantilla en la J${wn} (los onces reales de los rivales no son visibles). Los datos entran solos cada ~15 min.
+        Estimación con las 11 mejores puntuaciones de cada plantilla en la J${wn} (los onces reales de los rivales no son visibles). Toca un equipo para ver sus jugadores y puntos. Los datos entran solos cada ~15 min.
       </div>`;
     }
   }
@@ -4962,6 +4960,62 @@ function ligaTabDirecto(c, d){
   </div>
   ${mineHtml}
   ${liveTable}`;
+}
+
+/* ficha en vivo de un equipo de la liga: todos sus jugadores con los puntos
+   de la jornada, igual que mi once (desde la clasificación del Directo) */
+function openRivalLive(tid){
+  const c = comp();
+  const week = state.meta?.comps?.[c];
+  const wn = week?.weekNumber;
+  if (!wn) return;
+  const d = state.liga.data[c];
+  const B = computeBudgets(c);
+  const r = B?.rows.find(x => String(x.tid) === String(tid));
+  const isMe = !!r?.isMe;
+  let team = (state.rivalTeams[c] || {})[String(tid)];
+  if (isMe && (!team || team.error)) team = d?.team;
+  const title = esc(r?.manager || r?.name || "Equipo");
+  if (!team || team.error) {
+    openModal(`${modalHead("🔴 " + title)}<div class="modal-body">
+      <div class="empty-state" style="padding:24px">${team?.error ? esc(team.error) : "Cargando su equipo… vuelve a abrirlo en unos segundos."}</div></div>`);
+    return;
+  }
+  const lu = isMe ? state.lineup[c] : null;
+  const luIds = lu?.ids?.length ? new Set(lu.ids.map(String)) : null;
+  const players = (team.players || team.playerTeams || []).map(x => {
+    const pm = x.playerMaster || x.player || x;
+    const pid = String(pm.id ?? "");
+    return { pm, pid, pts: weekPts(c, pid, wn) };
+  }).sort((a, b) => (b.pts ?? -99) - (a.pts ?? -99));
+  // qué puntuaciones cuentan: mi once real si existe; para rivales, sus 11 mejores
+  const counted = luIds
+    ? new Set(players.filter(x => luIds.has(x.pid)).map(x => x.pid))
+    : new Set(players.filter(x => x.pts != null).slice(0, 11).map(x => x.pid));
+  const jpts = players.reduce((a, x) => a + (counted.has(x.pid) ? (x.pts || 0) : 0), 0);
+  const scored = players.filter(x => x.pts != null).length;
+  openModal(`
+    ${modalHead("🔴 " + title + (isMe ? " · YO" : ""))}
+    <div class="modal-body">
+      <div class="stat-grid" style="margin-bottom:12px">
+        ${statTile("Puntos J" + wn, `<span style="color:var(--acc)">${jpts}</span>`, scored + "/" + players.length + " han puntuado")}
+        ${statTile("Total en vivo", nfES.format((r?.points || 0) + jpts), nfES.format(r?.points || 0) + " + J" + wn)}
+      </div>
+      <div class="card">${players.map(x => {
+        const badge = counted.has(x.pid)
+          ? `<span class="badge acc" style="padding:1px 6px;font-size:9px">${luIds ? "ONCE" : "CUENTA"}</span>`
+          : `<span style="color:var(--text-3)">${x.pts == null ? "sin puntuar" : "no cuenta"}</span>`;
+        return ligaPlayerRow(x.pm, `<div class="p-right">
+          <div class="p-val ${x.pts != null ? (x.pts >= 5 ? "up" : x.pts < 0 ? "down" : "") : ""}">${x.pts != null ? x.pts + " pts" : "—"}</div>
+          <div class="p-sub">${badge}</div>
+        </div>`);
+      }).join("")}</div>
+      <div style="font-size:10.5px;color:var(--text-3);margin-top:8px">
+        ${luIds ? "Cuentan los 11 de tu once." : "El once real del rival no es visible: cuentan sus 11 mejores puntuaciones de la J" + wn + "."}
+        ${week.isLive ? " Los puntos entran solos cada ~15 min: puedes dejar la ficha abierta." : ""}
+        Toca un jugador para abrir su ficha.
+      </div>
+    </div>`);
 }
 
 /* --- pestaña: prensa de la liga (titulares con los datos del historial) --- */
