@@ -526,6 +526,30 @@
   .budget-line b { font-variant-numeric: tabular-nums; }
   .budget-line.total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 9px; padding-bottom: 10px; font-size: 13px; }
 
+  /* ------- campo de mi once ------- */
+  .pitch {
+    background: linear-gradient(180deg, #0d2b1a 0%, #071b10 100%);
+    border: 1px solid #17402a; border-radius: 16px; padding: 18px 8px 12px; position: relative; overflow: hidden;
+  }
+  html[data-theme="light"] .pitch { background: linear-gradient(180deg, #2e8b57 0%, #1f6b41 100%); border-color: #1a5c37; }
+  .pitch::before {
+    content: ""; position: absolute; left: 50%; top: -40px; transform: translateX(-50%);
+    width: 160px; height: 80px; border: 2px solid rgba(255,255,255,0.09); border-radius: 0 0 80px 80px;
+  }
+  .pitch-row { display: flex; justify-content: space-evenly; margin-bottom: 14px; }
+  .pitch-row:last-child { margin-bottom: 2px; }
+  .pitch-chip { display: flex; flex-direction: column; align-items: center; width: 62px; cursor: pointer; }
+  .pitch-chip img, .pitch-chip .ph {
+    width: 44px; height: 44px; border-radius: 50%; object-fit: cover; object-position: top;
+    background: rgba(0,0,0,0.35); border: 2px solid var(--acc);
+  }
+  .pitch-chip .ph { display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.4); font-size: 17px; border-style: dashed; border-color: rgba(255,255,255,0.3); }
+  .pitch-chip .nm {
+    margin-top: 3px; font-size: 9.5px; font-weight: 700; color: #fff; text-align: center; max-width: 62px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+  }
+  .pitch-chip .pt { font-size: 9px; font-weight: 800; color: #ffe27a; text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
+
   /* ------- segmentos de gráfica ------- */
   .seg { display: inline-flex; background: var(--card-2); border: 1px solid var(--border); border-radius: 9px; padding: 2px; gap: 2px; }
   .seg button { padding: 5px 11px; border-radius: 7px; font-size: 11px; font-weight: 700; color: var(--text-3); }
@@ -549,6 +573,7 @@
       <button data-m="hyper">HYPERMOTION</button>
       <button data-m="laliga">LALIGA</button>
     </div>
+    <button class="icon-btn" onclick="openSearch()" title="Buscar (/)"><svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></button>
     <button class="icon-btn" id="btnTheme" title="Tema claro/oscuro"></button>
     <button class="icon-btn" id="btnMenu" title="Menú"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg></button>
   </div>
@@ -573,6 +598,7 @@
   <div class="side-spacer"></div>
   <div class="side-updated" id="sideUpdated"></div>
   <div class="side-foot">
+    <button class="icon-btn" onclick="openSearch()" title="Buscar (/)"><svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></button>
     <button class="icon-btn" id="btnThemeSide" title="Tema claro/oscuro"></button>
     <button class="icon-btn" id="btnMenuSide" title="Ajustes"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg></button>
     <button class="icon-btn" id="btnRefreshSide" title="Actualizar en vivo" onclick="liveRefresh()"><svg class="ic" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></button>
@@ -635,6 +661,7 @@ const state = {
   moves: load(LS.moves, {"1":[], "2":[]}),
   watch: load(LS.watch, {"1":[], "2":[]}),
   favs: load(LS.favs, {"1":[], "2":[]}),
+  lineup: load("fs_lineup_v1", {}),   // comp -> {formation, ids[]} · mi once inicial
   calFull: {},          // comp -> {weeks:{n:[...]}}
   stats: {},            // comp -> {keys:[...], players:{pid:[totales]}}
   filters: { q:"", pos:"", team:"", sort:"d1down", watchOnly:false, limit:100 },
@@ -698,6 +725,8 @@ async function pushSync(){
       squad: state.squad, watch: state.watch, favs: state.favs, moves: state.moves,
       money: { "1": ligaMoney(state.liga.data["1"]?.money), "2": ligaMoney(state.liga.data["2"]?.money) },
       wealth: load("fs_wealth_hist", {}), // para el resumen semanal de Telegram
+      budgetHist: load("fs_budget_hist", {}), // caja de rivales, inmortal en la nube
+      lineup: load("fs_lineup_v1", {}), // mi once inicial (también para la crónica)
     };
     await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey(), {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -717,6 +746,9 @@ async function pullSync(){
     state.moves = Object.assign({"1":[], "2":[]}, data.moves || {});
     state.watch = Object.assign({"1":[], "2":[]}, data.watch || {});
     state.favs = Object.assign({"1":[], "2":[]}, data.favs || {});
+    if (data.wealth) try { localStorage.setItem("fs_wealth_hist", JSON.stringify(data.wealth)); } catch(e){}
+    if (data.budgetHist) try { localStorage.setItem("fs_budget_hist", JSON.stringify(data.budgetHist)); } catch(e){}
+    if (data.lineup) try { localStorage.setItem("fs_lineup_v1", JSON.stringify(data.lineup)); state.lineup = data.lineup; } catch(e){}
     persist();
     closeModal();
     render();
@@ -2154,11 +2186,79 @@ async function restoreBackup(day){
     state.moves = Object.assign({"1":[], "2":[]}, data.moves || {});
     state.watch = Object.assign({"1":[], "2":[]}, data.watch || {});
     state.favs = Object.assign({"1":[], "2":[]}, data.favs || {});
+    if (data.wealth) try { localStorage.setItem("fs_wealth_hist", JSON.stringify(data.wealth)); } catch(e){}
+    if (data.budgetHist) try { localStorage.setItem("fs_budget_hist", JSON.stringify(data.budgetHist)); } catch(e){}
+    if (data.lineup) try { localStorage.setItem("fs_lineup_v1", JSON.stringify(data.lineup)); state.lineup = data.lineup; } catch(e){}
     persist();
     closeModal();
     render();
     toast("Restaurada la copia del " + lbl, "ok");
   } catch(e) { toast("No se pudo restaurar: " + e.message, "err"); }
+}
+
+/* =====================================================================
+   BÚSQUEDA GLOBAL (lupa / tecla "/")
+   ===================================================================== */
+function openSearch(){
+  const c = comp();
+  const norm = s => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const SECTIONS = [
+    ...VIEWS.map(v => ({ label: v.label, icon: "📂", go: () => setView(v.id) })),
+    { label: "Mercado de mi liga", icon: "🛒", go: () => { state.ligaTab = "mercado"; setView("liga"); } },
+    { label: "Rivales y presupuestos", icon: "🕵️", go: () => { state.ligaTab = "rivales"; setView("liga"); } },
+    { label: "Cláusulas", icon: "🔓", go: () => { state.ligaTab = "clausulas"; setView("liga"); } },
+    { label: "Directo de la jornada", icon: "🔴", go: () => { state.ligaTab = "directo"; setView("liga"); } },
+    { label: "Prensa de la liga", icon: "📰", go: () => { state.ligaTab = "prensa"; setView("liga"); } },
+    { label: "Mapa valor-puntos", icon: "🗺", go: () => { state.statsTab = "mapa"; setView("stats"); } },
+    { label: "Calendario fácil", icon: "📅", go: () => { state.statsTab = "fixture"; setView("stats"); } },
+    { label: "Exportar mis datos", icon: "💾", go: () => exportData() },
+    { label: "Ajustes", icon: "⚙️", go: () => openMenu() },
+  ];
+  window._searchGo = [];
+  openModal(`
+    ${modalHead("🔍 Buscar")}
+    <div class="modal-body">
+      <div class="search-box">${IC.search}<input id="gSearch" placeholder="Jugador, mánager o apartado…" autocomplete="off"></div>
+      <div id="gResults"></div>
+    </div>`, ov => {
+      const inp = ov.querySelector("#gSearch");
+      const out = ov.querySelector("#gResults");
+      const renderRes = () => {
+        const q = norm(inp.value || "");
+        window._searchGo = [];
+        let html = "";
+        const item = (icon, label, sub, fn) => {
+          const i = window._searchGo.push(fn) - 1;
+          return `<div class="p-row" onclick="closeModal();window._searchGo[${i}]()">
+            <div style="font-size:18px;width:30px;text-align:center">${icon}</div>
+            <div class="p-main"><div class="p-name">${label}</div>${sub ? `<div class="p-meta">${sub}</div>` : ""}</div>
+          </div>`;
+        };
+        // apartados
+        const secs = SECTIONS.filter(s => !q || norm(s.label).includes(q)).slice(0, q ? 4 : 6);
+        if (secs.length) html += `<div class="section-title">Apartados</div><div class="card">${secs.map(s => item(s.icon, esc(s.label), "", s.go)).join("")}</div>`;
+        if (q) {
+          // jugadores
+          const ps = (state.players[c] || []).filter(p => norm(p.nickname).includes(q)).sort((a, b) => pVal(b) - pVal(a)).slice(0, 8);
+          if (ps.length) html += `<div class="section-title">Jugadores</div><div class="card">${ps.map(p => {
+            const pid = String(p.id);
+            return item("⚽", esc(p.nickname), `${(POS[String(p.positionId)] || {}).tag || ""} · ${fmtM(pVal(p))} € · ${p.points ?? 0} pts`, () => openPlayer(pid));
+          }).join("")}</div>`;
+          // mánagers de mi liga
+          const standing = state.liga.data[c]?.standing || [];
+          const ms = standing.filter(r => { const m = (r.team || r).manager || {}; return norm(m.managerName || (r.team || r).name || "").includes(q); }).slice(0, 4);
+          if (ms.length) html += `<div class="section-title">Mánagers</div><div class="card">${ms.map(r => {
+            const team = r.team || r;
+            const tid = String(team.id ?? "");
+            return item("🆚", esc(team.manager?.managerName || team.name || "?"), `#${r.position} · ${r.points ?? 0} pts — abrir duelo`, () => openManagerCompare(tid));
+          }).join("")}</div>`;
+        }
+        out.innerHTML = html || `<div class="empty-state" style="padding:26px">Nada por aquí…</div>`;
+      };
+      inp.addEventListener("input", renderRes);
+      renderRes();
+      setTimeout(() => inp.focus(), 120);
+    });
 }
 
 /* =====================================================================
@@ -2450,6 +2550,7 @@ function openWatchModal(pid){
         </select>
       </div>
       ${moneyInput("wTarget", "Precio objetivo (opcional)", w && w.target ? w.target : "", "Sin precio, queda solo como vigilado")}
+      <button class="btn-ghost" style="width:100%;margin-bottom:10px;font-size:12px" id="wSuggest">✨ Sugerir objetivo (curva proyectada a 7 días)</button>
       <div class="hint" style="font-size:11.5px;color:var(--text-3);margin-bottom:12px" id="wHint"></div>
       <button class="btn-acc" style="width:100%" id="wGo">${w ? "Guardar objetivo" : "Vigilar"}</button>
       ${w ? `<button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" id="wDel">Dejar de vigilar</button>` : ""}
@@ -2464,6 +2565,26 @@ function openWatchModal(pid){
         hint.innerHTML = `Distancia al objetivo: <b class="${cls(diff)}">${fmtMSign(diff)}</b> (${val ? Math.abs(diff/val*100).toLocaleString("es-ES",{maximumFractionDigits:1}) : "?"} %)`;
       };
       inp.addEventListener("input", updHint); updHint();
+      // objetivo inteligente: proyecta la pendiente reciente 7 días (con topes de cordura)
+      ov.querySelector("#wSuggest").addEventListener("click", () => {
+        const dir = ov.querySelector("#wDir").value;
+        const h = (state.history[c] || {})[String(pid)] || [];
+        let sug;
+        if (h.length >= 4) {
+          const seg = h.slice(-6);
+          const slope = (seg[seg.length - 1][1] - seg[0][1]) / (seg.length - 1);
+          const proj = val + slope * 7;
+          sug = dir === "above"
+            ? Math.min(Math.max(proj, val * 1.04), val * 1.25)
+            : Math.max(Math.min(proj, val * 0.97), val * 0.75);
+        } else {
+          sug = dir === "above" ? val * 1.1 : val * 0.92;
+        }
+        sug = Math.round(sug / 10000) * 10000;
+        inp.value = nfES.format(sug);
+        updHint();
+        toast("Objetivo sugerido por su curva reciente", "ok");
+      });
       ov.querySelector("#wGo").addEventListener("click", () => {
         const target = moneyVal(inp) || null;
         const dir = ov.querySelector("#wDir").value;
@@ -2662,6 +2783,169 @@ function openEditEntry(entryId){
 /* =====================================================================
    VISTA: MI PLANTILLA
    ===================================================================== */
+/* =====================================================================
+   MI ONCE INICIAL (en Mi Plantilla)
+   ===================================================================== */
+const FORMATIONS = ["3-4-3", "3-5-2", "4-3-3", "4-4-2", "4-5-1", "5-3-2", "5-4-1"];
+
+function saveLineup(){
+  localStorage.setItem("fs_lineup_v1", JSON.stringify(state.lineup));
+  scheduleSync();
+}
+
+/* puntuación de un jugador: forma + media + dificultad del próximo rival */
+function scoreLocal(c, p){
+  if (!p) return { score: 0, why: "sin datos" };
+  if (p.playerStatus !== "ok" && p.playerStatus !== "doubtful") {
+    return { score: -100, why: (STATUS[p.playerStatus] || {}).label || "baja" };
+  }
+  const riv = rivalDifficulty(c, p.teamId);
+  let score = form3(p) * 2 + (p.averagePoints || 0);
+  let why = `forma ${form3(p).toLocaleString("es-ES",{maximumFractionDigits:1})}`;
+  if (riv && riv.rival) {
+    score += riv.level === 1 ? 1.5 : riv.level === 3 ? -1.5 : 0;
+    why += ` · ${riv.home ? "vs" : "en"} ${riv.rival.shortName || riv.rival.name} ${riv.level === 1 ? "🟢" : riv.level === 3 ? "🔴" : "🟡"}`;
+  }
+  if (p.playerStatus === "doubtful") { score -= 3; why += " · duda"; }
+  return { score, why };
+}
+
+/* mejor once posible con MI plantilla (para autocompletar y para la nota) */
+function bestFromSquad(c){
+  const pool = state.squad[c]
+    .filter(e => !e.custom && e.pos !== "5")
+    .map(e => ({ e, p: state.byId[c].get(String(e.pid)) }))
+    .filter(x => x.p)
+    .map(x => ({ ...x, s: scoreLocal(c, x.p).score }));
+  const by = k => pool.filter(x => String(x.p.positionId) === k).sort((a, b) => b.s - a.s);
+  const G = by("1"), D = by("2"), M = by("3"), F = by("4");
+  let best = null;
+  for (const f of FORMATIONS) {
+    const [nd, nm, nf] = f.split("-").map(Number);
+    if (G.length < 1 || D.length < nd || M.length < nm || F.length < nf) continue;
+    const xi = [G[0], ...D.slice(0, nd), ...M.slice(0, nm), ...F.slice(0, nf)];
+    const total = xi.reduce((a, x) => a + Math.max(x.s, 0), 0);
+    if (!best || total > best.total) best = { formation: f, ids: xi.map(x => String(x.p.id)), total };
+  }
+  return best;
+}
+
+function lineupTotal(c, ids){
+  return (ids || []).reduce((a, pid) => a + Math.max(scoreLocal(c, state.byId[c].get(String(pid))).score, 0), 0);
+}
+
+function lineupSection(c){
+  const lu = state.lineup[c];
+  const best = bestFromSquad(c);
+  if (!lu || !lu.ids?.length) {
+    if (!best) return ""; // sin jugadores suficientes: ni se ofrece
+    return `<div class="section-title">🏟 Mi once inicial</div>
+    <div class="card" style="padding:16px;margin-bottom:14px;text-align:center">
+      <div style="font-size:13px;color:var(--text-2);margin-bottom:12px">Monta tu once para verlo en el campo, puntuarlo y seguirlo en directo las jornadas.</div>
+      <div style="display:flex;gap:9px">
+        <button class="btn-acc" style="flex:1" onclick="applyBestLineup()">⚡ Usar el mejor once (${best.formation})</button>
+        <button class="btn-ghost" style="flex:1" onclick="openLineupEditor()">Montarlo a mano</button>
+      </div>
+    </div>`;
+  }
+  const [nd, nm, nf] = (lu.formation || "4-4-2").split("-").map(Number);
+  const ids = lu.ids;
+  const groups = [ids.slice(1 + nd + nm), ids.slice(1 + nd, 1 + nd + nm), ids.slice(1, 1 + nd), ids.slice(0, 1)]; // DEL, CEN, DEF, POR
+  const week = state.meta?.comps?.[c]?.weekNumber;
+  const chip = pid => {
+    const p = state.byId[c].get(String(pid));
+    if (!p) return `<div class="pitch-chip"><div class="ph">?</div><div class="nm">—</div></div>`;
+    const wp = (p.weekPoints || []).find(w => w.weekNumber === week);
+    const stt = STATUS[p.playerStatus];
+    return `<div class="pitch-chip" onclick="openPlayer('${p.id}')">
+      <img src="${esc(p.image)}" alt="" loading="lazy" onerror="this.outerHTML='<div class=&quot;ph&quot;>👤</div>'"
+        ${p.playerStatus !== "ok" ? `style="border-color:${stt?.color || "var(--red)"}"` : ""}>
+      <div class="nm">${esc(p.nickname)}</div>
+      <div class="pt">${wp ? wp.points + " pts" : (p.averagePoints || 0).toLocaleString("es-ES", { maximumFractionDigits: 1 }) + " med"}</div>
+    </div>`;
+  };
+  const myTotal = lineupTotal(c, ids);
+  const grade = best ? ` · el mejor posible: <b>${best.total.toLocaleString("es-ES",{maximumFractionDigits:0})}</b>${best.total > myTotal + 3 ? ` <button style="color:var(--acc);font-weight:700" onclick="applyBestLineup()">mejorar ›</button>` : " ✅"}` : "";
+  return `<div class="section-title">🏟 Mi once inicial · ${lu.formation}
+    <button style="margin-left:auto;color:var(--acc);font-size:11.5px;font-weight:700" onclick="openLineupEditor()">Editar ›</button>
+  </div>
+  <div class="pitch" style="margin-bottom:8px">${groups.map(g => `<div class="pitch-row">${g.map(chip).join("")}</div>`).join("")}</div>
+  <div style="font-size:11.5px;color:var(--text-3);margin-bottom:14px;padding:0 4px">
+    Puntuación esperada: <b>${myTotal.toLocaleString("es-ES",{maximumFractionDigits:0})}</b>${grade}
+  </div>`;
+}
+
+function applyBestLineup(){
+  const c = comp();
+  const best = bestFromSquad(c);
+  if (!best) { toast("No hay jugadores suficientes (necesitas POR, DEF, CEN y DEL)", "err"); return; }
+  state.lineup[c] = { formation: best.formation, ids: best.ids };
+  saveLineup();
+  vibrate(12);
+  toast("Once " + best.formation + " colocado", "ok");
+  render();
+}
+
+function openLineupEditor(){
+  const c = comp();
+  const lu = state.lineup[c] || { formation: "4-4-2", ids: [] };
+  const sel = new Set(lu.ids.map(String));
+  const pool = state.squad[c].filter(e => !e.custom && e.pos !== "5" && state.byId[c].get(String(e.pid)));
+  const groupHtml = (k, label) => {
+    const list = pool.filter(e => e.pos === k);
+    if (!list.length) return `<div class="field"><label>${label}</label><div style="font-size:12px;color:var(--text-3)">No tienes ${label.toLowerCase()} en Mi Plantilla</div></div>`;
+    return `<div class="field"><label>${label} <span id="cnt${k}" style="color:var(--acc)"></span></label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${list.map(e => {
+        const p = state.byId[c].get(String(e.pid));
+        const sc = scoreLocal(c, p);
+        return `<button class="chip lu-chip ${sel.has(String(e.pid)) ? "active" : ""}" data-pos="${k}" data-pid="${esc(String(e.pid))}">${esc(p.nickname)} <span style="opacity:.7">${Math.max(sc.score,0).toLocaleString("es-ES",{maximumFractionDigits:0})}</span></button>`;
+      }).join("")}</div></div>`;
+  };
+  openModal(`
+    ${modalHead("🏟 Editar mi once")}
+    <div class="modal-body">
+      <div class="field"><label>Formación</label>
+        <select id="luForm">${FORMATIONS.map(f => `<option ${f === lu.formation ? "selected" : ""}>${f}</option>`).join("")}</select>
+      </div>
+      ${groupHtml("1", "Portero")}${groupHtml("2", "Defensas")}${groupHtml("3", "Centrocampistas")}${groupHtml("4", "Delanteros")}
+      <button class="btn-acc" style="width:100%" id="luGo">Guardar once</button>
+      <button class="btn-ghost" style="width:100%;margin-top:9px" onclick="applyBestLineup();closeModal()">⚡ Autocompletar con el mejor</button>
+    </div>`, ov => {
+      const need = () => {
+        const [nd, nm, nf] = ov.querySelector("#luForm").value.split("-").map(Number);
+        return { "1": 1, "2": nd, "3": nm, "4": nf };
+      };
+      const picked = k => [...ov.querySelectorAll(`.lu-chip.active[data-pos="${k}"]`)].map(b => b.dataset.pid);
+      const refresh = () => {
+        const n = need();
+        for (const k of ["1", "2", "3", "4"]) {
+          const el = ov.querySelector("#cnt" + k);
+          if (el) el.textContent = `(${picked(k).length}/${n[k]})`;
+        }
+      };
+      ov.querySelectorAll(".lu-chip").forEach(b => b.addEventListener("click", () => {
+        const k = b.dataset.pos, n = need();
+        if (!b.classList.contains("active") && picked(k).length >= n[k]) { toast(`Ya tienes ${n[k]} en esa línea (cambia la formación o quita uno)`, "err"); return; }
+        b.classList.toggle("active");
+        refresh();
+      }));
+      ov.querySelector("#luForm").addEventListener("change", refresh);
+      refresh();
+      ov.querySelector("#luGo").addEventListener("click", () => {
+        const n = need();
+        for (const k of ["1", "2", "3", "4"]) {
+          if (picked(k).length !== n[k]) { toast(`Te faltan jugadores: ${picked(k).length}/${n[k]} en ${POS[k].name}`, "err"); return; }
+        }
+        state.lineup[c] = { formation: ov.querySelector("#luForm").value, ids: [...picked("1"), ...picked("2"), ...picked("3"), ...picked("4")] };
+        saveLineup();
+        closeModal();
+        vibrate(12);
+        toast("Once guardado", "ok");
+        render();
+      });
+    });
+}
+
 function viewPlantilla(){
   const c = comp();
   const st = squadStats(c);
@@ -2678,7 +2962,7 @@ function viewPlantilla(){
       <div class="card" style="margin-bottom:6px">${group.map(squadRow).join("")}</div>`;
     }).join("");
   }
-  return updatedLine() + `
+  return updatedLine() + lineupSection(c) + `
   <div class="stat-grid" style="margin-bottom:16px">
     ${statTile("Jugadores", st.n, "")}
     ${statTile("Invertido", fmtM(st.invested) + " €", "")}
@@ -3316,6 +3600,69 @@ function projectionHtml(c, B){
   </details>`;
 }
 
+/* serpentín: evolución de posiciones de la liga privada, jornada a jornada */
+async function loadSerpent(c){
+  const sel = state.myLeague[c];
+  const wk = state.meta?.comps?.[c];
+  if (!sel || !wk) return;
+  const st = state.serpent || (state.serpent = {});
+  if (st[c]?.loading || st[c]?.done) return;
+  st[c] = { loading: true, weeks: [], byTeam: {} };
+  render();
+  const lastW = wk.previousWeek ?? (wk.weekNumber - 1);
+  for (let w = 1; w <= lastW; w++) {
+    try {
+      const rows = unwrapList(await authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/standing/${w}?x-lang=es`));
+      if (!rows.length) continue;
+      // ordena por puntos ACUMULADOS hasta esa jornada si vienen; si el endpoint
+      // ya da position, la usamos tal cual
+      st[c].weeks.push(w);
+      rows.forEach((r, i) => {
+        const team = r.team || r;
+        const tid = String(team.id ?? "");
+        const t = st[c].byTeam[tid] || (st[c].byTeam[tid] = { name: team.manager?.managerName || team.name || "?", pos: {} });
+        t.pos[w] = r.position ?? i + 1;
+      });
+    } catch(e) { /* jornada sin datos */ }
+  }
+  st[c].loading = false;
+  st[c].done = true;
+  render();
+}
+
+function serpentHtml(c){
+  const sp = state.serpent?.[c];
+  if (!sp) return `<button class="btn-ghost" style="width:100%;margin-bottom:10px" onclick="loadSerpent('${c}')">📈 Cargar serpentín (evolución de posiciones)</button>`;
+  if (sp.loading) return `<div class="card" style="padding:16px;margin-bottom:10px;text-align:center;color:var(--text-3);font-size:12px">Leyendo las clasificaciones de cada jornada…</div>`;
+  const weeks = sp.weeks;
+  if (weeks.length < 2) return `<div class="card" style="padding:13px;margin-bottom:10px;font-size:12px;color:var(--text-3)">El serpentín necesita al menos 2 jornadas cerradas — vuelve tras la próxima.</div>`;
+  const tids = Object.keys(sp.byTeam);
+  const N = tids.length;
+  const W = 460, H = 40 + N * 26, PL = 30, PR = 96, PT = 14, PB = 20;
+  const x = i => PL + i * ((W - PL - PR) / Math.max(1, weeks.length - 1));
+  const y = pos => PT + (pos - 1) * ((H - PT - PB) / Math.max(1, N - 1));
+  const myId = String(state.myLeague[c]?.teamId || "");
+  const palette = ["#60a5fa", "#f472b6", "#fb923c", "#a78bfa", "#22d3ee", "#facc15", "#34d399", "#f87171", "#c084fc", "#fbbf24"];
+  let li = 0;
+  const lines = tids.map(tid => {
+    const t = sp.byTeam[tid];
+    const mine = tid === myId;
+    const col = mine ? "var(--acc)" : palette[li++ % palette.length];
+    const pts = weeks.map((w, i) => t.pos[w] != null ? `${x(i).toFixed(1)},${y(t.pos[w]).toFixed(1)}` : null).filter(Boolean);
+    if (pts.length < 2) return "";
+    const lastPos = t.pos[weeks[weeks.length - 1]];
+    return `<polyline points="${pts.join(" ")}" fill="none" stroke="${col}" stroke-width="${mine ? 3.4 : 1.8}" opacity="${mine ? 1 : 0.75}" stroke-linejoin="round" stroke-linecap="round"/>
+      <text x="${W - PR + 6}" y="${y(lastPos) + 3}" font-size="9.5" font-weight="${mine ? 800 : 500}" fill="${col}">${esc(t.name.slice(0, 12))}</text>`;
+  }).join("");
+  return `<div class="card" style="padding:12px;margin-bottom:10px">
+    <h4 style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-3);margin-bottom:8px">📈 Serpentín de la liga</h4>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+      ${weeks.map((w, i) => `<text x="${x(i)}" y="${H - 4}" text-anchor="middle" font-size="9" fill="var(--text-3)">J${w}</text>`).join("")}
+      ${lines}
+    </svg>
+  </div>`;
+}
+
 /* foto diaria de los presupuestos (en este dispositivo) para ver quién acumula caja */
 function snapshotBudgets(c, rows){
   const t = +new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" }).replace(/-/g, "");
@@ -3669,12 +4016,18 @@ function viewLiga(){
       ${diagHtml()}`;
   }
 
-  const TABS = [["mercado","Mercado del día"],["pujas","Mis pujas"],["ventas","Mis ventas"],["equipo","Mi equipo"],["once","Once ideal"],["clausulas","🔓 Cláusulas"],["rivales","Rivales"],["prensa","📰 Prensa"],["actividad","Actividad"]];
+  const isLive = !!state.meta?.comps?.[c]?.isLive;
+  const TABS = [
+    ...(isLive ? [["directo","🔴 Directo"]] : []),
+    ["mercado","Mercado del día"],["pujas","Mis pujas"],["ventas","Mis ventas"],["equipo","Mi equipo"],["once","Once ideal"],["clausulas","🔓 Cláusulas"],["rivales","Rivales"],["prensa","📰 Prensa"],["actividad","Actividad"],
+    ...(!isLive ? [["directo","Directo"]] : []),
+  ];
   const tabsHtml = `<div class="chips-row no-scrollbar" style="margin-bottom:12px">${TABS.map(([id,l]) =>
     `<button class="chip ${state.ligaTab === id ? "active" : ""}" onclick="state.ligaTab='${id}';render()">${l}</button>`).join("")}</div>`;
 
   let body = "";
-  if (state.ligaTab === "mercado") body = ligaTabMercado(c, d);
+  if (state.ligaTab === "directo") body = ligaTabDirecto(c, d);
+  else if (state.ligaTab === "mercado") body = ligaTabMercado(c, d);
   else if (state.ligaTab === "pujas") body = ligaTabPujas(c, d);
   else if (state.ligaTab === "ventas") body = ligaTabVentas(c, d);
   else if (state.ligaTab === "equipo") body = ligaTabEquipo(c, d);
@@ -4045,11 +4398,17 @@ function ligaTabClausulas(c, d){
     Alcance = dinero + deuda permitida (20% del valor de plantilla).${money != null ? ` El tuyo: <b style="color:var(--acc)">${fmtM(myReach)} €</b>.` : ""}
   </div>
   <div class="section-title">🚨 Tus jugadores en peligro (${danger.length})</div>
-  ${danger.length ? `<div class="card">${danger.map(dd => ligaPlayerRow(dd.pm, `<div class="p-right">
+  ${danger.length ? `<div class="card">${danger.map(dd => {
+      // asesor de blindaje: cláusula mínima para quedar fuera del alcance del rival más rico (+5% de margen)
+      const worst = Math.max(...dd.threats.map(maxCash));
+      const safe = Math.ceil(worst * 1.05 / 100000) * 100000;
+      return ligaPlayerRow(dd.pm, `<div class="p-right">
       <div class="p-val">${fmtM(dd.clause)} €</div>
       <div class="p-sub" style="color:var(--red)">al alcance de ${dd.threats.slice(0,2).map(t => esc(t.manager || t.name)).join(", ")}${dd.threats.length > 2 ? " +" + (dd.threats.length - 2) : ""}</div>
-    </div>`)).join("")}</div>
-    <div style="font-size:11px;color:var(--text-3);margin-top:6px;padding:0 4px">Súbeles la cláusula desde la app oficial si no quieres perderlos.</div>`
+      <div class="p-sub" style="margin-top:2px">🛡 blíndalo hasta <b style="color:var(--acc)">${fmtM(safe)}</b> <span style="color:var(--text-3)">(+${fmtM(safe - dd.clause)})</span></div>
+    </div>`);
+    }).join("")}</div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px;padding:0 4px">🛡 = cláusula mínima para quedar fuera del alcance del rival más rico, con un 5 % de margen. La subida se hace en la app oficial (cada juego cobra su tarifa por blindar).</div>`
     : `<div class="card" style="padding:14px;font-size:12.5px;color:var(--green)">✅ Ninguna de tus cláusulas está al alcance de un rival ahora mismo.</div>`}
 
   <div class="section-title">🎯 Cláusulas a tu alcance (${chances.length})</div>
@@ -4213,6 +4572,7 @@ function ligaTabRivales(c, d){
     ${B.incomplete ? `<br><span style="color:var(--orange)">⚠ La fórmula no cuadra con tu dinero real: el historial visible quizá no cubre toda la liga. Tómalo como aproximación.</span>` : ""}
   </div>
   ${projectionHtml(c, B)}
+  ${serpentHtml(c)}
   ${hoardHtml}
   ${B.rows.map(r => {
     const open = state.rivalOpen === r.tid;
@@ -4264,6 +4624,100 @@ function ligaTabRivales(c, d){
     </div>`;
   }).join("")}
   <button class="btn-ghost" style="width:100%;margin-top:6px" onclick="loadFullActivity(comp(), true)">Recalcular con el historial más reciente</button>`;
+}
+
+/* --- pestaña: 🔴 salón del directo --- */
+function weekPts(c, pid, week){
+  const p = state.byId[c].get(String(pid));
+  const wp = p && (p.weekPoints || []).find(w => w.weekNumber === week);
+  return wp ? (wp.points || 0) : null;
+}
+
+function ligaTabDirecto(c, d){
+  const week = state.meta?.comps?.[c];
+  const wn = week?.weekNumber;
+  if (!wn) return `<div class="card"><div class="empty-state">Sin jornada activa</div></div>`;
+  const isLive = !!week.isLive;
+
+  // mi once (de Mi Plantilla); sin once, aviso
+  const lu = state.lineup[c];
+  let mineHtml, myLive = 0, myCount = 0;
+  if (!lu || !lu.ids?.length) {
+    mineHtml = `<div class="card" style="padding:16px;text-align:center;font-size:13px;color:var(--text-2)">
+      Monta <b>tu once</b> en Mi Plantilla para seguirlo aquí en vivo.
+      <button class="btn-acc" style="width:100%;margin-top:12px" onclick="setView('plantilla')">Ir a Mi Plantilla ›</button></div>`;
+  } else {
+    const rows = lu.ids.map(pid => {
+      const p = state.byId[c].get(String(pid));
+      if (!p) return "";
+      const pts = weekPts(c, pid, wn);
+      if (pts != null) { myLive += pts; myCount++; }
+      return playerRow(p, { reason: pts != null ? `<b class="${pts >= 5 ? "up" : pts < 0 ? "down" : ""}">${pts} pts en la J${wn}</b>` : `<span style="color:var(--text-3)">aún sin puntuar</span>`, noSpark: true });
+    }).join("");
+    mineHtml = `
+    <div class="stat-grid" style="margin-bottom:12px">
+      ${statTile("Mis puntos J" + wn, `<span style="color:var(--acc)">${myLive}</span>`, myCount + "/11 han puntuado")}
+      ${statTile("Dinero generado", "+" + fmtM(myLive * 100000) + " €", "a 100.000 €/punto")}
+    </div>
+    <div class="card">${rows}</div>`;
+  }
+
+  // clasificación en vivo estimada de la liga: puntos previos + jornada actual
+  // de cada plantilla rival (sus 11 mejores puntuaciones de la jornada)
+  const act = state.actFull[c];
+  if (!act || (!act.done && !act.loading)) setTimeout(() => loadFullActivity(c), 30);
+  const B = computeBudgets(c);
+  const cache = state.rivalTeams[c] || {};
+  let liveTable = "";
+  if (!B) {
+    liveTable = `<div class="section-title">Clasificación en vivo (estimada)</div>
+      <div class="card"><div class="empty-state" style="padding:20px">Preparando la clasificación de tu liga…</div></div>`;
+  }
+  if (B) {
+    if (!cache._all) {
+      setTimeout(() => loadAllRivalTeams(c), 30);
+      liveTable = `<div class="section-title">Clasificación en vivo (estimada)</div>
+        <div class="card"><div class="empty-state" style="padding:20px">Cargando los equipos de tus rivales…</div></div>`;
+    } else {
+      const sel = state.myLeague[c];
+      const rows = B.rows.map(r => {
+        let team = cache[r.tid];
+        if (r.isMe && (!team || team.error)) team = d.team;
+        let jpts = null;
+        if (r.isMe && lu?.ids?.length) {
+          jpts = lu.ids.reduce((a, pid) => a + (weekPts(c, pid, wn) || 0), 0);
+        } else if (team && !team.error) {
+          const all = (team.players || team.playerTeams || [])
+            .map(x => { const pm = x.playerMaster || x.player || x; return weekPts(c, pm.id, wn) || 0; })
+            .sort((a, b) => b - a).slice(0, 11);
+          jpts = all.reduce((a, b) => a + b, 0);
+        }
+        return { ...r, jpts: jpts ?? 0, total: r.points + (jpts ?? 0) };
+      }).sort((a, b) => b.total - a.total);
+      liveTable = `<div class="section-title">Clasificación en vivo (estimada)</div>
+      <div class="card">${rows.map((r, i) => {
+        const moved = r.pos - (i + 1);
+        return `<div class="p-row" style="cursor:default">
+          <span class="rival-pos ${r.isMe ? "me" : ""}">${i + 1}</span>
+          <div class="p-main"><div class="p-name">${esc(r.manager || r.name)}${r.isMe ? ` <span class="badge acc" style="padding:1px 6px;font-size:9px">YO</span>` : ""}</div>
+            <div class="p-meta">J${wn}: <b class="${r.jpts >= 40 ? "up" : ""}">+${r.jpts}</b>${moved ? ` · ${moved > 0 ? "▲" : "▼"}${Math.abs(moved)}` : ""}</div></div>
+          <div class="p-right"><div class="p-val">${nfES.format(r.total)}</div><div class="p-sub">pts totales</div></div>
+        </div>`;
+      }).join("")}</div>
+      <div style="font-size:10.5px;color:var(--text-3);margin-top:8px;padding:0 4px">
+        Estimación con las 11 mejores puntuaciones de cada plantilla en la J${wn} (los onces reales de los rivales no son visibles). Los datos entran solos cada ~15 min.
+      </div>`;
+    }
+  }
+
+  return `
+  <div class="card" style="padding:13px 15px;margin-bottom:12px;display:flex;align-items:center;gap:11px">
+    <span class="sync-dot ${isLive ? "pulsing" : ""}" style="background:${isLive ? "var(--red)" : "var(--text-3)"}"></span>
+    <div style="flex:1;font-size:13px;font-weight:700">Jornada ${wn} ${isLive ? "EN JUEGO" : "· sin partidos ahora"}</div>
+    <button class="icon-btn" onclick="autoCheck().then(()=>render())" title="Refrescar">${IC.refresh}</button>
+  </div>
+  ${mineHtml}
+  ${liveTable}`;
 }
 
 /* --- pestaña: prensa de la liga (titulares con los datos del historial) --- */
@@ -4567,6 +5021,9 @@ document.getElementById("importFile").addEventListener("change", async e => {
     state.moves = Object.assign({"1":[], "2":[]}, data.moves);
     state.watch = Object.assign({"1":[], "2":[]}, data.watch || {});
     state.favs = Object.assign({"1":[], "2":[]}, data.favs || {});
+    if (data.wealth) try { localStorage.setItem("fs_wealth_hist", JSON.stringify(data.wealth)); } catch(e){}
+    if (data.budgetHist) try { localStorage.setItem("fs_budget_hist", JSON.stringify(data.budgetHist)); } catch(e){}
+    if (data.lineup) try { localStorage.setItem("fs_lineup_v1", JSON.stringify(data.lineup)); state.lineup = data.lineup; } catch(e){}
     if (data.league) { state.myLeague = data.league; localStorage.setItem(LS.league, JSON.stringify(data.league)); }
     if (data.workerUrl && !state.workerUrl) { state.workerUrl = data.workerUrl; localStorage.setItem(LS.worker, data.workerUrl); }
     persist();
@@ -4602,7 +5059,10 @@ document.getElementById("btnTheme").addEventListener("click", toggleTheme);
 document.getElementById("btnThemeSide")?.addEventListener("click", toggleTheme);
 document.getElementById("btnMenu").addEventListener("click", openMenu);
 document.getElementById("btnMenuSide")?.addEventListener("click", openMenu);
-document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") closeModal();
+  if (e.key === "/" && !/input|textarea|select/i.test(e.target.tagName)) { e.preventDefault(); openSearch(); }
+});
 
 /* --- refresco automático: si data/ se ha republicado, recarga sin tocar nada --- */
 let _lastMetaAt = null;
