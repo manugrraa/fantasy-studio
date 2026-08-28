@@ -1,0 +1,40 @@
+name: Sala de guerra de jornada
+
+on:
+  schedule:
+    # Tres pasadas diarias (mañana, tarde y noche España): el script solo envía
+    # si la jornada arranca en menos de 30 h y aún no se avisó de esa jornada.
+    - cron: "15 7,15,18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  guerra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sala de guerra
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FANTASY_SYNC_KEY: ${{ secrets.FANTASY_SYNC_KEY }}
+        run: python scripts/sala_guerra.py
+
+      - name: Guardar estado
+        run: |
+          git config user.name "fantasy-studio-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/warroom_state.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Sin estado nuevo"
+          else
+            git commit -m "guerra: J avisada"
+            git push
+          fi

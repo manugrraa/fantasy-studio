@@ -39,17 +39,35 @@ function jsonRes(obj, status, cors){
 
 async function handleSync(request, url, env, cors, originOk){
   if (!env.SYNC) return jsonRes({ error: "KV no configurado" }, 500, cors);
-  const key = url.pathname.slice("/sync/".length);
+  // /sync/{clave} · /sync/{clave}/versions · /sync/{clave}/v/{yyyymmdd}
+  const parts = url.pathname.slice("/sync/".length).split("/").filter(Boolean);
+  const key = parts[0] || "";
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(key)) return jsonRes({ error: "clave no válida" }, 400, cors);
+
   if (request.method === "PUT" || request.method === "POST") {
+    if (parts.length > 1) return jsonRes({ error: "solo se escribe la copia actual" }, 405, cors);
     if (!originOk) return jsonRes({ error: "origen no permitido" }, 403, cors);
     const body = await request.text();
     if (body.length > SYNC_MAX_BYTES) return jsonRes({ error: "demasiado grande" }, 413, cors);
     try { JSON.parse(body); } catch(e) { return jsonRes({ error: "no es JSON" }, 400, cors); }
     await env.SYNC.put("s:" + key, body, { expirationTtl: 60 * 60 * 24 * SYNC_TTL_DAYS });
+    // versión diaria (histórico de 60 días): se sobreescribe dentro del mismo día
+    const day = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" }).replace(/-/g, "");
+    await env.SYNC.put(`v:${key}:${day}`, body, { expirationTtl: 60 * 60 * 24 * 60 });
     return jsonRes({ ok: true }, 200, cors);
   }
+
   if (request.method === "GET") {
+    if (parts[1] === "versions") {
+      const list = await env.SYNC.list({ prefix: `v:${key}:` });
+      const days = list.keys.map(k => k.name.split(":").pop()).sort().reverse();
+      return jsonRes({ versions: days }, 200, cors);
+    }
+    if (parts[1] === "v" && /^\d{8}$/.test(parts[2] || "")) {
+      const v = await env.SYNC.get(`v:${key}:${parts[2]}`);
+      if (v == null) return jsonRes({ error: "sin esa versión" }, 404, cors);
+      return new Response(v, { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+    }
     const v = await env.SYNC.get("s:" + key);
     if (v == null) return jsonRes({ error: "sin datos" }, 404, cors);
     return new Response(v, { status: 200, headers: { ...cors, "Content-Type": "application/json" } });

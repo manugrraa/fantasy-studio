@@ -437,6 +437,20 @@
   .picker-add { width: 34px; height: 34px; border-radius: 10px; background: var(--acc-soft); border: 1px solid var(--acc-border); color: var(--acc); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
   .skeleton { text-align:center; padding: 80px 20px; color: var(--text-3); }
+  .skeleton::after {
+    content: ""; display: block; height: 3px; width: 160px; max-width: 60%; margin: 18px auto 0; border-radius: 99px;
+    background: linear-gradient(90deg, var(--card-2) 25%, var(--acc-soft) 50%, var(--card-2) 75%);
+    background-size: 200% 100%; animation: shimmer 1.1s linear infinite;
+  }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+  /* transición suave al cambiar de vista y tacto en filas/chips */
+  @keyframes viewIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  main.view-anim > * { animation: viewIn .22s ease both; }
+  .p-row, .rival-head, .mv-row { transition: background .12s, transform .08s; }
+  .p-row:active, .rival-head:active { transform: scale(.985); }
+  .chip:active, .btn-acc:active, .btn-ghost:active { transform: scale(.96); }
+  .stat-tile .val { transition: color .2s; }
 
   /* ------- logo ------- */
   .logo-mark { width: 40px; height: 40px; flex-shrink: 0; filter: drop-shadow(0 0 7px var(--acc-glow)); }
@@ -790,7 +804,7 @@ async function loadAll(){
 }
 
 function rebuildIndexes(){
-  _strengthCache = null;
+  clearDeltaCache();
   state.byId = {};
   for (const c of ["1","2"]) {
     state.byId[c] = new Map((state.players[c] || []).map(p => [String(p.id), p]));
@@ -799,6 +813,7 @@ function rebuildIndexes(){
 
 function patchHistoryFromLive(c){
   // integra el valor en vivo como punto de "hoy" para que los deltas usen el dato fresco
+  clearDeltaCache();
   const t = parseInt(new Date().toLocaleDateString("sv-SE",{timeZone:"Europe/Madrid"}).replace(/-/g,""), 10);
   const hist = state.history[c] || (state.history[c] = {});
   for (const p of state.players[c] || []) {
@@ -847,15 +862,38 @@ async function liveRefresh(){
 
 /* ---------- derivados ---------- */
 function pVal(p){ return parseInt(p.marketValue || 0, 10); }
-function deltas(c, pid){
+/* momento de venta: analiza la curva reciente (¿acelera, se aplana, cae?) */
+function sellVerdict(c, pid){
   const h = (state.history[c] || {})[String(pid)];
-  if (!h || h.length < 2) return { d1:0, d7:0, d0:0, has:false };
+  if (!h || h.length < 5) return null;
+  const seg = h.slice(-7);
+  const diffs = [];
+  for (let i = 1; i < seg.length; i++) diffs.push(seg[i][1] - seg[i-1][1]);
+  const rec = diffs.slice(-3).reduce((a, b) => a + b, 0) / Math.min(3, diffs.length);
+  const prev = diffs.slice(0, -3);
+  const old = prev.length ? prev.reduce((a, b) => a + b, 0) / prev.length : rec;
+  const val = h[h.length - 1][1];
+  const T = Math.max(30000, val * 0.002); // umbral de "movimiento real"
+  if (rec <= -T) return { icon: "🔴", label: "vende YA", cls: "red", why: "está cayendo (" + fmtMSign(Math.round(rec)) + "/día)" };
+  if (rec >= T && rec >= old * 0.8) return { icon: "🟢", label: "mantén", cls: "green", why: "sigue acelerando (" + fmtMSign(Math.round(rec)) + "/día)" };
+  if (old >= T && rec < old * 0.5) return { icon: "🟡", label: "vende esta semana", cls: "orange", why: "la subida se está aplanando" };
+  return { icon: "⚪", label: "estable", cls: "", why: "sin movimientos relevantes" };
+}
+
+let _deltaCache = {};
+function clearDeltaCache(){ _deltaCache = {}; _strengthCache = null; }
+function deltas(c, pid){
+  const k = c + ":" + pid;
+  const hit = _deltaCache[k];
+  if (hit) return hit;
+  const h = (state.history[c] || {})[String(pid)];
+  if (!h || h.length < 2) return (_deltaCache[k] = { d1:0, d7:0, d0:0, has:false });
   const last = h[h.length-1];
   const d1 = last[1] - h[h.length-2][1];
   const target = intMinusDays(last[0], 7);
   let base = h[0];
   for (const e of h) { if (e[0] <= target) base = e; else break; }
-  return { d1, d7: last[1] - base[1], d0: last[1] - h[0][1], has:true };
+  return (_deltaCache[k] = { d1, d7: last[1] - base[1], d0: last[1] - h[0][1], has:true });
 }
 function intMinusDays(yyyymmdd, days){
   const s = String(yyyymmdd);
@@ -1050,6 +1088,11 @@ function setView(v){
   state.view = v;
   vibrate(8);
   render();
+  // reengancha la animación de entrada de la vista
+  const main = document.getElementById("main");
+  main.classList.remove("view-anim");
+  void main.offsetWidth;
+  main.classList.add("view-anim");
   window.scrollTo({ top: 0 });
 }
 
@@ -1878,12 +1921,14 @@ function openPlayer(pid){
   let ownHtml = "";
   if (entry) {
     const pl = val - (entry.buyPrice || 0);
+    const v = sellVerdict(c, pid);
     ownHtml = `<div class="chart-card" style="border-color:var(--acc-border)">
       <h4>En mi plantilla</h4>
       <div class="pl-pl" style="font-size:13px">
         <span>Comprado por <b>${fmt(entry.buyPrice||0)}</b>${entry.buyDate ? " · " + fmtDate(entry.buyDate) : ""}</span>
         <b class="${cls(pl)}">${fmtSign(pl)}</b>
-      </div></div>`;
+      </div>
+      ${v ? `<div style="margin-top:8px;font-size:12.5px">${v.icon} Momento de venta: <b style="color:var(--${v.cls || "text-2"})">${v.label}</b> — ${v.why}.</div>` : ""}</div>`;
   }
 
   // posición en los rankings de la liga
@@ -2008,6 +2053,48 @@ function openPlayer(pid){
 function setPdTab(t){
   window._pdTab = t;
   if (window._modalPid) openPlayer(window._modalPid);
+}
+
+/* historial de copias diarias en la nube: restaurar a cualquier fecha */
+async function openBackupHistory(){
+  if (!state.workerUrl) { toast("Falta el servidor puente", "err"); return; }
+  let days = [];
+  try {
+    const r = await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey() + "/versions", { signal: AbortSignal.timeout(10000) });
+    days = (await r.json()).versions || [];
+  } catch(e) { toast("No se pudo leer el historial", "err"); return; }
+  if (!days.length) { toast("Aún no hay copias diarias (se crean solas al usar la app)"); return; }
+  const lbl = d => `${d.slice(6,8)}/${d.slice(4,6)}/${d.slice(0,4)}`;
+  openModal(`
+    ${modalHead("🕐 Historial de copias")}
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--text-2);margin-bottom:12px;line-height:1.5">
+        Una copia por día de tu plantilla, movimientos, vigilados y favoritos. Toca una fecha para restaurarla en este dispositivo.
+      </div>
+      <div class="card">${days.map(d => `
+        <button class="p-row" style="width:100%;text-align:left" onclick="restoreBackup('${d}')">
+          <div class="p-main"><div class="p-name">📦 ${lbl(d)}</div></div>
+          <span style="color:var(--acc);font-size:12px;font-weight:700">Restaurar ›</span>
+        </button>`).join("")}</div>
+    </div>`);
+}
+async function restoreBackup(day){
+  try {
+    const r = await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey() + "/v/" + day, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error("no disponible");
+    const data = await r.json();
+    if (!data.squad) throw new Error("copia no válida");
+    const lbl = `${day.slice(6,8)}/${day.slice(4,6)}`;
+    if (!confirm(`¿Restaurar la copia del ${lbl}? Sustituirá plantilla, movimientos, vigilados y favoritos de ESTE dispositivo (y la copia actual de la nube en unos segundos).`)) return;
+    state.squad = Object.assign({"1":[], "2":[]}, data.squad);
+    state.moves = Object.assign({"1":[], "2":[]}, data.moves || {});
+    state.watch = Object.assign({"1":[], "2":[]}, data.watch || {});
+    state.favs = Object.assign({"1":[], "2":[]}, data.favs || {});
+    persist();
+    closeModal();
+    render();
+    toast("Restaurada la copia del " + lbl, "ok");
+  } catch(e) { toast("No se pudo restaurar: " + e.message, "err"); }
 }
 
 /* =====================================================================
@@ -2429,7 +2516,7 @@ function squadRow(e){
     </div>
     <div class="p-right">
       <div class="p-val">${p ? trendIcon(deltas(c, e.pid).d1) + " " : ""}${current != null ? fmtM(current) + " €" : "—"}</div>
-      <div class="p-sub"><span class="delta-pill ${pl != null ? cls(pl) : "flat"}">${pl != null ? fmtMSign(pl) : "manual"}</span></div>
+      <div class="p-sub"><span class="delta-pill ${pl != null ? cls(pl) : "flat"}">${pl != null ? fmtMSign(pl) : "manual"}</span>${(() => { const v = p ? sellVerdict(c, e.pid) : null; return v && v.icon !== "⚪" ? ` <span title="${esc(v.why)}">${v.icon}</span>` : ""; })()}</div>
     </div>
     <button class="icon-btn" style="width:30px;height:30px" onclick="event.stopPropagation();openEditEntry('${e.id}')" title="Editar">${IC.edit.replace('class="ic"','class="ic" style="width:13px;height:13px"')}</button>
   </div>`;
@@ -2987,6 +3074,52 @@ function computeBudgets(c){
   if (me && myMoney != null && Math.abs(myMoney - (me.base + me.extra)) > 3000000) incomplete = true;
   return { rows, hasPrizes, incomplete };
 }
+/* proyección de la clasificación final de la liga privada: ritmo actual de
+   puntos por jornada jugada (jornadas = premios tipo 6 cobrados) × las que quedan */
+function projectionHtml(c, B){
+  const act = state.actFull[c];
+  if (!act?.done) return "";
+  const maps = managerMaps(c);
+  const weeksPlayed = {};
+  for (const raw of act.items) {
+    const a = parseAct(raw);
+    if (a.type !== 6) continue;
+    const t1 = actTeam(a, maps, 1);
+    if (t1) weeksPlayed[t1] = (weeksPlayed[t1] || 0) + 1;
+  }
+  const maxPlayed = Math.max(1, ...Object.values(weeksPlayed));
+  const total = Object.keys(state.calFull[c]?.weeks || {}).length || (c === "2" ? 42 : 38);
+  const cur = state.meta?.comps?.[c]?.weekNumber || 1;
+  const remaining = Math.max(0, total - cur + 1);
+  const rows = B.rows.map(r => {
+    const played = weeksPlayed[r.tid] || maxPlayed;
+    const rate = r.points / Math.max(1, played);
+    return { ...r, rate, proj: Math.round(r.points + rate * remaining) };
+  }).sort((a, b) => b.proj - a.proj);
+  const me = rows.find(r => r.isMe);
+  const leader = rows[0];
+  let chase = "";
+  if (me && leader && leader.tid !== me.tid) {
+    const need = remaining > 0 ? (leader.proj - me.points) / remaining : 0;
+    chase = `Para acabar primero necesitas <b>${need.toLocaleString("es-ES",{maximumFractionDigits:1})} pts/jornada</b> (llevas ${me.rate.toLocaleString("es-ES",{maximumFractionDigits:1})}).`;
+  } else if (me && leader && leader.tid === me.tid) {
+    chase = `Vas camino de ganar la liga: mantén el ritmo de ${me.rate.toLocaleString("es-ES",{maximumFractionDigits:1})} pts/jornada. 👑`;
+  }
+  return `<details class="card" style="padding:0;margin-bottom:10px">
+    <summary style="padding:12px 14px;cursor:pointer;font-size:13px;font-weight:700;color:var(--text-2);list-style:none">🔮 Proyección final (a ${remaining} jornadas del final)</summary>
+    <div style="padding:0 14px 12px">
+      ${rows.map((r, i) => `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12.5px">
+        <span class="rival-pos ${r.isMe ? "me" : ""}" style="width:22px;height:22px;font-size:11px">${i + 1}</span>
+        <span style="flex:1;font-weight:${r.isMe ? 800 : 500}">${esc(r.manager || r.name)}${r.isMe ? " (tú)" : ""}</span>
+        <span style="color:var(--text-3);font-size:11px">${r.rate.toLocaleString("es-ES",{maximumFractionDigits:1})}/j</span>
+        <b style="font-variant-numeric:tabular-nums;color:var(--acc)">~${nfES.format(r.proj)}</b>
+      </div>`).join("")}
+      ${chase ? `<div style="font-size:12px;color:var(--text-2);margin-top:9px;line-height:1.5">${chase}</div>` : ""}
+      <div style="font-size:10.5px;color:var(--text-3);margin-top:6px">Proyección simple: ritmo actual × jornadas restantes. El mercado la puede volcar — de eso va Fantasy Studio.</div>
+    </div>
+  </details>`;
+}
+
 /* foto diaria de los presupuestos (en este dispositivo) para ver quién acumula caja */
 function snapshotBudgets(c, rows){
   const t = +new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" }).replace(/-/g, "");
@@ -3401,9 +3534,14 @@ function ligaTabMercado(c, d){
           : `🎯 A ningún rival le llega el dinero para este precio`}
       </div>`;
     }
+    // ganga: sale por debajo de su valor de mercado (dinero gratis si nadie puja)
+    const localP = state.byId[c].get(pid);
+    const mv = localP ? pVal(localP) : (pm.marketValue != null ? +pm.marketValue : null);
+    const discount = mv && +price < mv ? mv - +price : 0;
+    const gangaHtml = discount >= mv * 0.03 ? `<span class="badge green" style="font-size:9.5px;padding:2px 7px">💸 GANGA −${fmtM(discount)}</span>` : "";
     return ligaPlayerRow(pm, `<div class="p-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
-      <div><span class="p-val">${fmtM(+price)} €</span>
-        <div class="p-sub">${bids != null ? bids + (bids === 1 ? " puja" : " pujas") : ""}${sellerName ? " · " + esc(sellerName) : ""}${exp ? " · hasta " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}</div></div>
+      <div style="display:flex;align-items:center;gap:6px">${gangaHtml}<span class="p-val">${fmtM(+price)} €</span></div>
+      <div class="p-sub">${bids != null ? bids + (bids === 1 ? " puja" : " pujas") : ""}${sellerName ? " · " + esc(sellerName) : ""}${exp ? " · hasta " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}${mv ? " · vale " + fmtM(mv) : ""}</div>
       ${btn}
     </div>`) + biddersHtml;
   }).join("")}</div>`;
@@ -3875,6 +4013,7 @@ function ligaTabRivales(c, d){
     Presupuesto: 100M iniciales + ventas − compras + ${B.hasPrizes ? "<b>premios de jornada reales</b> (del historial de la liga)" : "<b>100.000 € por punto</b> (estimado)"}. Tu fila usa tu dinero real.
     ${B.incomplete ? `<br><span style="color:var(--orange)">⚠ La fórmula no cuadra con tu dinero real: el historial visible quizá no cubre toda la liga. Tómalo como aproximación.</span>` : ""}
   </div>
+  ${projectionHtml(c, B)}
   ${hoardHtml}
   ${B.rows.map(r => {
     const open = state.rivalOpen === r.tid;
@@ -4136,7 +4275,8 @@ function openMenu(){
           Tu plantilla, vigilados y favoritos se copian solos (cifrados en tránsito) a TU Worker bajo esta clave secreta:<br>
           <code style="display:block;background:var(--card-2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin:8px 0;font-size:11px;word-break:break-all" id="syncKeyShow"></code>
           <button class="btn-ghost" style="width:100%;margin-bottom:8px" onclick="navigator.clipboard.writeText(syncKey()).then(()=>toast('Clave copiada','ok'))">Copiar clave</button>
-          <button class="btn-ghost" style="width:100%;margin-bottom:10px" onclick="pullSync()">Restaurar en este dispositivo desde la nube</button>
+          <button class="btn-ghost" style="width:100%;margin-bottom:8px" onclick="pullSync()">Restaurar en este dispositivo desde la nube</button>
+          <button class="btn-ghost" style="width:100%;margin-bottom:10px" onclick="openBackupHistory()">🕐 Historial de copias (una por día, 60 días)</button>
           Para que el <b>resumen de Telegram</b> incluya TUS vigilados, plantilla y dinero: pega la clave en
           <a href="https://github.com/manugrraa/fantasy-studio/settings/secrets/actions/new" target="_blank" rel="noopener" style="color:var(--acc)">este formulario</a>
           con Name <b>FANTASY_SYNC_KEY</b>. Un solo paso, una vez.
