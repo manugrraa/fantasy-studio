@@ -1,0 +1,42 @@
+name: Actualizar datos Fantasy
+
+on:
+  schedule:
+    # 5 veces al día (UTC). El valor de mercado cambia una vez al día de madrugada;
+    # los puntos se mueven durante las jornadas.
+    - cron: "23 5,9,13,17,21 * * *"
+    # y cada 2 horas de viernes a lunes, que es cuando ruedan los partidos
+    - cron: "53 */2 * * 5,6,0,1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: datos
+  cancel-in-progress: false
+
+jobs:
+  datos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Descargar datos de la API
+        run: python scripts/update_data.py
+
+      - name: Publicar cambios
+        run: |
+          git config user.name "fantasy-studio-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then
+            echo "Sin cambios en los datos"
+          else
+            git commit -m "datos: actualización automática"
+            git push
+          fi
