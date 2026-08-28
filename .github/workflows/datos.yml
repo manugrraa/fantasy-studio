@@ -2,11 +2,10 @@ name: Actualizar datos Fantasy
 
 on:
   schedule:
-    # 5 veces al día (UTC). El valor de mercado cambia una vez al día de madrugada;
-    # los puntos se mueven durante las jornadas.
-    - cron: "23 5,9,13,17,21 * * *"
-    # y cada 2 horas de viernes a lunes, que es cuando ruedan los partidos
-    - cron: "53 */2 * * 5,6,0,1"
+    # Cada 15 minutos: la app va casi en tiempo real (puntos en jornada, estados,
+    # valores de madrugada). El script solo commitea si algo cambió, y las
+    # estadísticas pesadas (1 petición/jugador) solo se bajan una vez al día.
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:

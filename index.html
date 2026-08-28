@@ -193,6 +193,49 @@
   .bottom-nav button.active { color: var(--acc); }
   .bottom-nav svg.ic { width: 21px; height: 21px; }
 
+  /* ------- barra lateral (escritorio) ------- */
+  .sidebar { display: none; }
+  @media (min-width: 1000px) {
+    header.topbar { display: none; }
+    .bottom-nav { display: none !important; }
+    .sidebar {
+      display: flex; flex-direction: column; position: fixed; left: 0; top: 0; bottom: 0; width: 228px;
+      background: var(--bg-2); border-right: 1px solid var(--border); z-index: 150;
+      padding: 18px 12px 14px; gap: 3px; overflow-y: auto;
+    }
+    .wrap { margin-left: 228px; max-width: 1150px; padding: 24px 28px 60px; }
+  }
+  .side-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 12px; }
+  .side-mode { margin: 0 6px 12px; }
+  .side-mode .mode-switch { width: 100%; }
+  .side-mode .mode-switch button { flex: 1; }
+  .side-item {
+    display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 10px;
+    font-size: 13.5px; font-weight: 600; color: var(--text-2); width: 100%; text-align: left;
+    transition: background .12s, color .12s;
+  }
+  .side-item:hover { background: var(--card); color: var(--text); }
+  .side-item.active { background: var(--acc-soft); color: var(--acc); }
+  .side-spacer { flex: 1; }
+  .side-foot { display: flex; gap: 8px; padding: 10px 6px 0; border-top: 1px solid var(--border); margin-top: 10px; align-items: center; }
+  .side-updated { font-size: 10.5px; color: var(--text-3); padding: 8px 8px 0; display: flex; align-items: center; gap: 6px; }
+
+  /* accesos rápidos en Resumen (solo móvil/tablet) */
+  .quick-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  @media (min-width: 1000px) { .quick-nav { display: none; } }
+  .quick-nav .card { padding: 12px 8px; text-align: center; font-size: 11.5px; font-weight: 700; color: var(--text-2); }
+  .quick-nav .card .qi { font-size: 19px; margin-bottom: 4px; }
+
+  /* ocultar texto de marca en móviles estrechos */
+  @media (max-width: 520px) { .brand { display: none; } }
+  @media (max-width: 430px) { .mode-switch button { padding: 6px 8px; font-size: 9.5px; } }
+
+  /* posiciones en tablas */
+  .pos-n { display: inline-flex; width: 21px; height: 21px; border-radius: 6px; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--text-3); background: var(--card-2); }
+  tr.zone-up .pos-n { background: rgba(74,222,128,0.16); color: var(--green); }
+  tr.zone-po .pos-n { background: var(--acc-soft); color: var(--acc); }
+  tr.zone-down .pos-n { background: rgba(248,113,113,0.14); color: var(--red); }
+
   .card {
     background: var(--card); border: 1px solid var(--border); border-radius: 14px;
     transition: border-color .15s, background .15s;
@@ -391,6 +434,64 @@
   .picker-add { width: 34px; height: 34px; border-radius: 10px; background: var(--acc-soft); border: 1px solid var(--acc-border); color: var(--acc); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
   .skeleton { text-align:center; padding: 80px 20px; color: var(--text-3); }
+
+  /* ------- logo ------- */
+  .logo-mark { width: 40px; height: 40px; flex-shrink: 0; filter: drop-shadow(0 0 7px var(--acc-glow)); }
+  .logo-mark svg { width: 100%; height: 100%; display: block; }
+
+  /* ------- tabla clasificación ------- */
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table.standings { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 480px; }
+  table.standings th {
+    text-align: center; font-size: 10px; font-weight: 700; color: var(--text-3); text-transform: uppercase;
+    letter-spacing: .4px; padding: 8px 4px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--card);
+  }
+  table.standings td { text-align: center; padding: 7px 4px; border-bottom: 1px solid var(--border); color: var(--text-2); font-variant-numeric: tabular-nums; }
+  table.standings tr:last-child td { border-bottom: none; }
+  table.standings th.name-col, table.standings td.name-col { text-align: left; }
+  table.standings td.name-col { color: var(--text); font-weight: 600; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  table.standings td.name-col img { width: 16px; height: 16px; object-fit: contain; vertical-align: -3px; margin-right: 6px; }
+  table.standings td.pts { color: var(--acc); font-weight: 800; }
+  .zone-dot { display: inline-block; width: 8px; height: 8px; border-radius: 3px; margin-right: 6px; vertical-align: 0; }
+  .zone-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-3); margin-top: 10px; padding: 0 4px; }
+
+  /* ------- calendario ------- */
+  .week-chips { display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px 8px; margin-bottom: 10px; }
+  .week-chip {
+    min-width: 44px; padding: 8px 0; border-radius: 10px; font-size: 12px; font-weight: 700; text-align: center;
+    background: var(--card); border: 1px solid var(--border); color: var(--text-2); flex-shrink: 0;
+  }
+  .week-chip.sel { background: var(--grad); border-color: transparent; color: var(--on-acc); }
+  .week-chip.cur { border-color: var(--acc); color: var(--acc); }
+  .week-chip.cur.sel { color: var(--on-acc); }
+  .day-lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--text-3); margin: 14px 0 7px; }
+  .day-lbl:first-child { margin-top: 0; }
+
+  /* ------- objetivos ------- */
+  .obj-target { font-size: 11px; font-weight: 700; color: var(--acc); }
+  .obj-hit { border: 1px solid var(--acc) !important; box-shadow: 0 0 14px -4px var(--acc-glow); }
+  .hit-banner {
+    border: 1px solid var(--acc); background: var(--acc-soft); border-radius: 14px; padding: 13px 15px;
+    margin-bottom: 16px; display: flex; gap: 11px; align-items: flex-start; cursor: pointer;
+  }
+  .progress-mini { height: 4px; background: var(--track); border-radius: 99px; overflow: hidden; margin-top: 5px; }
+  .progress-mini > div { height: 100%; background: var(--grad); border-radius: 99px; }
+
+  /* ------- segmentos de gráfica ------- */
+  .seg { display: inline-flex; background: var(--card-2); border: 1px solid var(--border); border-radius: 9px; padding: 2px; gap: 2px; }
+  .seg button { padding: 5px 11px; border-radius: 7px; font-size: 11px; font-weight: 700; color: var(--text-3); }
+  .seg button.sel { background: var(--grad); color: var(--on-acc); }
+  .chart-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .chart-head h4 { margin-bottom: 0 !important; }
+
+  /* ------- hoja "más" (móvil) ------- */
+  .more-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .more-item {
+    display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 10px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px; font-size: 12.5px; font-weight: 600; color: var(--text-2);
+  }
+  .more-item.active { border-color: var(--acc); color: var(--acc); background: var(--acc-soft); }
+  .more-item svg.ic { width: 22px; height: 22px; }
 </style>
 </head>
 <body>
@@ -412,6 +513,30 @@
   </div>
   <nav class="desktop-tabs" id="desktopTabs"></nav>
 </header>
+
+<aside class="sidebar" id="sidebar">
+  <div class="side-brand">
+    <div class="logo-sq">FS</div>
+    <div class="brand">
+      <h1 style="font-size:15px;font-weight:800">Fantasy Studio</h1>
+      <div class="sub" id="modeSubSide" style="font-size:10px;font-weight:600;color:var(--acc);text-transform:uppercase;letter-spacing:.8px">LaLiga Hypermotion</div>
+    </div>
+  </div>
+  <div class="side-mode">
+    <div class="mode-switch" id="modeSwitchSide">
+      <button data-m="hyper">HYPERMOTION</button>
+      <button data-m="laliga">LALIGA</button>
+    </div>
+  </div>
+  <nav id="sideNav" style="display:flex;flex-direction:column;gap:3px"></nav>
+  <div class="side-spacer"></div>
+  <div class="side-updated" id="sideUpdated"></div>
+  <div class="side-foot">
+    <button class="icon-btn" id="btnThemeSide" title="Tema claro/oscuro"></button>
+    <button class="icon-btn" id="btnMenuSide" title="Ajustes"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg></button>
+    <button class="icon-btn" id="btnRefreshSide" title="Actualizar en vivo" onclick="liveRefresh()"><svg class="ic" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></button>
+  </div>
+</aside>
 
 <main class="wrap" id="main">
   <div class="skeleton" id="loading">Cargando datos…</div>
@@ -468,10 +593,21 @@ const state = {
   squad: load(LS.squad, {"1":[], "2":[]}),
   moves: load(LS.moves, {"1":[], "2":[]}),
   watch: load(LS.watch, {"1":[], "2":[]}),
+  calFull: {},          // comp -> {weeks:{n:[...]}}
+  stats: {},            // comp -> {keys:[...], players:{pid:[totales]}}
   filters: { q:"", pos:"", team:"", sort:"d1down", watchOnly:false, limit:100 },
   moveFilter: "all",
+  statsTab: "clasificacion",
+  rankTab: "points",
+  calWeek: null,
   liveAt: null,
 };
+
+// migración de vigilados v1 (array de ids) a objetivos v2 (objetos con precio objetivo)
+for (const c of ["1","2"]) {
+  state.watch[c] = (state.watch[c] || []).map(w =>
+    typeof w === "string" ? { pid: w, target: null, dir: null, createdAt: null, notifiedAt: null } : w);
+}
 
 function comp() { return MODES[state.mode].comp; }
 function load(key, def) { try { const v = JSON.parse(localStorage.getItem(key)); return v ?? def; } catch(e){ return def; } }
@@ -515,7 +651,7 @@ async function fetchJSON(url){
 }
 
 async function loadAll(){
-  const [meta, teams, p1, p2, h1, h2, c1, c2] = await Promise.all([
+  const [meta, teams, p1, p2, h1, h2, c1, c2, f1, f2, s1, s2] = await Promise.all([
     fetchJSON("data/meta.json"),
     fetchJSON("data/teams.json"),
     fetchJSON("data/players_1.json"),
@@ -524,12 +660,18 @@ async function loadAll(){
     fetchJSON("data/history_2.json").catch(()=> ({})),
     fetchJSON("data/calendar_1.json").catch(()=> null),
     fetchJSON("data/calendar_2.json").catch(()=> null),
+    fetchJSON("data/calendar_full_1.json").catch(()=> null),
+    fetchJSON("data/calendar_full_2.json").catch(()=> null),
+    fetchJSON("data/stats_1.json").catch(()=> null),
+    fetchJSON("data/stats_2.json").catch(()=> null),
   ]);
   state.meta = meta;
   state.teams = new Map(teams.map(t => [String(t.id), t]));
   state.players = { "1": p1, "2": p2 };
   state.history = { "1": h1, "2": h2 };
   state.calendar = { "1": c1, "2": c2 };
+  state.calFull = { "1": f1, "2": f2 };
+  state.stats = { "1": s1, "2": s2 };
   // caché en vivo previa (de "Actualizar ahora") si es más reciente que los datos publicados
   const cache = load(LS.cache, null);
   if (cache && cache.at && state.meta.updatedAt && new Date(cache.at) > new Date(state.meta.updatedAt)) {
@@ -625,7 +767,12 @@ function ppm(p){
 }
 function teamOf(p){ return state.teams.get(String(p.teamId)); }
 function squadEntry(pid){ return state.squad[comp()].find(e => String(e.pid) === String(pid)); }
-function isWatched(pid){ return state.watch[comp()].includes(String(pid)); }
+function watchEntry(pid){ return state.watch[comp()].find(w => String(w.pid) === String(pid)); }
+function isWatched(pid){ return !!watchEntry(pid); }
+function targetReached(w, val){
+  if (!w || !w.target || !val) return false;
+  return w.dir === "above" ? val >= w.target : val <= w.target;
+}
 
 /* ---------- señales para consejos ---------- */
 function streakOf(c, pid){
@@ -705,6 +852,12 @@ const IC = {
   upar:  '<svg class="ic" viewBox="0 0 24 24"><path d="M12 20V7"/><path d="m6 13 6-6 6 6"/></svg>',
   bulb:  '<svg class="ic" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4"/><path d="M12 3a6.5 6.5 0 0 0-4 11.6c.8.7 1.3 1.5 1.5 2.4h5c.2-.9.7-1.7 1.5-2.4A6.5 6.5 0 0 0 12 3z"/></svg>',
   ext:   '<svg class="ic" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M19 14v6H5V6h6"/></svg>',
+  chart: '<svg class="ic" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
+  cal:   '<svg class="ic" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>',
+  grid:  '<svg class="ic" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="2"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="2"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="2"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="2"/></svg>',
+  gear:  '<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.5a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.5h4l.4-2.5a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>',
+  bell:  '<svg class="ic" viewBox="0 0 24 24"><path d="M18 9a6 6 0 1 0-12 0c0 6-2.5 7-2.5 7h17S18 15 18 9"/><path d="M10 20a2.2 2.2 0 0 0 4 0"/></svg>',
+  target:'<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>',
 };
 
 /* ---------- toast ---------- */
@@ -751,18 +904,37 @@ function moneyVal(el){ return parseInt(el.value.replace(/\D/g, "") || "0", 10); 
    RENDER PRINCIPAL
    ===================================================================== */
 const VIEWS = [
-  { id:"resumen",   label:"Resumen",     short:"Resumen",   icon:IC.home },
-  { id:"mercado",   label:"Mercado",     short:"Mercado",   icon:IC.market },
-  { id:"consejos",  label:"Consejos",    short:"Consejos",  icon:IC.bulb },
-  { id:"plantilla", label:"Mi Plantilla",short:"Plantilla", icon:IC.shirt },
-  { id:"movs",      label:"Movimientos", short:"Movs",      icon:IC.moves },
+  { id:"resumen",    label:"Resumen",      short:"Resumen",   icon:IC.home },
+  { id:"mercado",    label:"Mercado",      short:"Mercado",   icon:IC.market },
+  { id:"consejos",   label:"Consejos",     short:"Consejos",  icon:IC.bulb },
+  { id:"stats",      label:"Estadísticas", short:"Stats",     icon:IC.chart },
+  { id:"calendario", label:"Calendario",   short:"Calendario",icon:IC.cal },
+  { id:"plantilla",  label:"Mi Plantilla", short:"Plantilla", icon:IC.shirt },
+  { id:"movs",       label:"Movimientos",  short:"Movs",      icon:IC.moves },
 ];
+const BOTTOM_IDS = ["resumen","mercado","plantilla","movs"]; // + botón Más
+const MORE_IDS = ["consejos","stats","calendario"];
 
 function renderNav(){
   document.getElementById("desktopTabs").innerHTML = VIEWS.map(v =>
     `<button class="tab ${state.view===v.id?"active":""}" onclick="setView('${v.id}')">${v.icon} ${v.label}</button>`).join("");
-  document.getElementById("bottomNav").innerHTML = VIEWS.map(v =>
-    `<button class="${state.view===v.id?"active":""}" onclick="setView('${v.id}')">${v.icon}<span>${v.short}</span></button>`).join("");
+  const inMore = MORE_IDS.includes(state.view);
+  document.getElementById("bottomNav").innerHTML =
+    BOTTOM_IDS.map(id => { const v = VIEWS.find(x => x.id === id);
+      return `<button class="${state.view===id?"active":""}" onclick="setView('${id}')">${v.icon}<span>${v.short}</span></button>`; }).join("") +
+    `<button class="${inMore?"active":""}" onclick="openMoreSheet()">${IC.grid}<span>Más</span></button>`;
+  document.getElementById("sideNav").innerHTML = VIEWS.map(v =>
+    `<button class="side-item ${state.view===v.id?"active":""}" onclick="setView('${v.id}')">${v.icon} ${v.label}</button>`).join("");
+}
+function openMoreSheet(){
+  vibrate(8);
+  openModal(`
+    ${modalHead("Más apartados")}
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:8px">
+      ${MORE_IDS.map(id => { const v = VIEWS.find(x => x.id === id);
+        return `<button class="btn-ghost" style="justify-content:flex-start;padding:13px 15px;font-size:14px;${state.view===id?"color:var(--acc);border-color:var(--acc-border)":""}" onclick="closeModal();setView('${id}')">${v.icon} ${v.label}</button>`; }).join("")}
+      <button class="btn-ghost" style="justify-content:flex-start;padding:13px 15px;font-size:14px" onclick="closeModal();openMenu()">${IC.gear} Ajustes y copias</button>
+    </div>`);
 }
 function setView(v){
   state.view = v;
@@ -774,7 +946,9 @@ function setView(v){
 function applyMode(){
   document.documentElement.dataset.mode = state.mode;
   document.getElementById("modeSub").textContent = MODES[state.mode].label;
-  document.querySelectorAll("#modeSwitch button").forEach(b => b.classList.toggle("active", b.dataset.m === state.mode));
+  const side = document.getElementById("modeSubSide");
+  if (side) side.textContent = MODES[state.mode].label;
+  document.querySelectorAll("#modeSwitch button, #modeSwitchSide button").forEach(b => b.classList.toggle("active", b.dataset.m === state.mode));
   const dark = document.documentElement.dataset.theme !== "light";
   document.querySelector('meta[name="theme-color"]').content = dark ? "#000000" : "#F5F4F0";
 }
@@ -801,11 +975,13 @@ function applyThemeBtn(){
 function render(){
   renderNav();
   const main = document.getElementById("main");
-  if (state.view === "resumen")   main.innerHTML = viewResumen();
-  if (state.view === "mercado")   main.innerHTML = viewMercado();
-  if (state.view === "consejos")  main.innerHTML = viewConsejos();
-  if (state.view === "plantilla") main.innerHTML = viewPlantilla();
-  if (state.view === "movs")      main.innerHTML = viewMovs();
+  if (state.view === "resumen")    main.innerHTML = viewResumen();
+  if (state.view === "mercado")    main.innerHTML = viewMercado();
+  if (state.view === "consejos")   main.innerHTML = viewConsejos();
+  if (state.view === "stats")      main.innerHTML = viewStats();
+  if (state.view === "calendario") main.innerHTML = viewCalendario();
+  if (state.view === "plantilla")  main.innerHTML = viewPlantilla();
+  if (state.view === "movs")       main.innerHTML = viewMovs();
   afterRender();
 }
 function afterRender(){
@@ -813,6 +989,17 @@ function afterRender(){
   if (q) {
     q.value = state.filters.q;
     q.addEventListener("input", () => { state.filters.q = q.value; state.filters.limit = 100; refreshMarketList(); });
+  }
+  const chip = document.querySelector(".week-chip.sel");
+  if (chip) chip.scrollIntoView({ block: "nearest", inline: "center" });
+  const su = document.getElementById("sideUpdated");
+  if (su && state.meta) {
+    const base = state.liveAt || state.meta.updatedAt;
+    const d = new Date(base);
+    const stale = (Date.now() - d.getTime()) / 36e5 > 26;
+    su.innerHTML = `<span class="sync-dot ${stale?"stale":""}"></span> Datos: ` +
+      d.toLocaleDateString("es-ES",{day:"numeric",month:"short"}) + " " +
+      d.toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) + (state.liveAt ? " (en vivo)" : "");
   }
 }
 
@@ -864,18 +1051,50 @@ function viewResumen(){
     .map(e => e.custom ? null : state.byId[c].get(String(e.pid)))
     .filter(p => p && p.playerStatus !== "ok");
 
-  // vigilados
-  const watched = state.watch[c].map(id => state.byId[c].get(id)).filter(Boolean);
+  // objetivos y vigilados
+  const objRows = state.watch[c].map(w => {
+    const p = state.byId[c].get(String(w.pid));
+    if (!p) return "";
+    const val = pVal(p);
+    const hit = targetReached(w, val);
+    let reason;
+    if (w.target) {
+      const diff = w.target - val;
+      const pctTo = w.dir === "above"
+        ? Math.min(100, val / w.target * 100)
+        : Math.min(100, w.target / (val || 1) * 100);
+      reason = `<span class="obj-target">${IC.target.replace('class="ic"','class="ic" style="width:11px;height:11px;vertical-align:-1.5px"')} ${w.dir === "above" ? "vender a" : "fichar a"} ${fmtM(w.target)} €</span>` +
+        (hit ? ` · <b class="up">¡alcanzado!</b>` : ` · faltan ${fmtM(Math.abs(diff))}`) +
+        `<div class="progress-mini"><div style="width:${hit ? 100 : Math.round(pctTo)}%"></div></div>`;
+    } else {
+      const d = deltas(c, p.id);
+      reason = `<span class="${cls(d.d1)}">${d.d1 ? fmtMSign(d.d1) : "="} · hoy</span>`;
+    }
+    return `<div class="${hit ? "obj-hit" : ""}" style="border-radius:12px">${playerRow(p, { reason })}</div>`;
+  }).filter(Boolean);
+
+  const hits = state.watch[c].filter(w => { const p = state.byId[c].get(String(w.pid)); return p && targetReached(w, pVal(p)); });
+  const hitBanner = hits.length ? `<div class="hit-banner" onclick="setView('resumen')">
+      <div style="font-size:20px">🎯</div>
+      <div style="font-size:13px;line-height:1.45"><b>${hits.length === 1 ? "1 objetivo alcanzado" : hits.length + " objetivos alcanzados"}:</b>
+      ${hits.map(w => esc(state.byId[c].get(String(w.pid))?.nickname || "")).join(", ")}</div>
+    </div>` : "";
 
   const cal = state.calendar[c];
   let matchesHtml = "";
   if (cal && (cal.matches || []).length) {
     const ms = [...cal.matches].sort((a,b) => new Date(a.matchDate) - new Date(b.matchDate));
-    matchesHtml = `<div class="section-title">Jornada ${cal.week}</div><div class="card">` + ms.map(matchRow).join("") + `</div>`;
+    matchesHtml = `<div class="section-title">Jornada ${cal.week} <button style="margin-left:auto;color:var(--acc);font-size:11.5px;font-weight:700" onclick="setView('calendario')">Ver calendario ›</button></div><div class="card">` + ms.map(matchRow).join("") + `</div>`;
   }
 
   return updatedLine() + `
+  ${hitBanner}
   ${weekBanner(week)}
+  <div class="quick-nav">
+    <button class="card clickable" onclick="setView('consejos')"><div class="qi">💡</div>Consejos</button>
+    <button class="card clickable" onclick="setView('stats')"><div class="qi">📊</div>Estadísticas</button>
+    <button class="card clickable" onclick="setView('calendario')"><div class="qi">📅</div>Calendario</button>
+  </div>
   <div class="section-title">Mi economía</div>
   <div class="stat-grid">
     ${statTile("Valor plantilla", fmtM(st.current) + " €", st.n + (st.n===1?" jugador":" jugadores"))}
@@ -887,8 +1106,8 @@ function viewResumen(){
   ${alerts.length ? `<div class="section-title">Alertas de mi plantilla</div><div class="card">` +
       alerts.map(p => playerRow(p, { sub:"status" })).join("") + `</div>` : ""}
 
-  ${watched.length ? `<div class="section-title">Vigilados ${IC.eye.replace('class="ic"','class="ic" style="width:13px;height:13px"')}</div><div class="card">` +
-      watched.map(p => playerRow(p, { sub:"d1" })).join("") + `</div>` : ""}
+  ${objRows.length ? `<div class="section-title">Objetivos de mercado ${IC.target.replace('class="ic"','class="ic" style="width:13px;height:13px"')}</div><div class="card" style="padding:2px 0">` +
+      objRows.join("") + `</div>` : ""}
 
   <div class="two-col">
     <div>
@@ -1146,8 +1365,182 @@ function viewConsejos(){
 }
 
 /* =====================================================================
-   MODAL: FICHA DE JUGADOR
+   VISTA: ESTADÍSTICAS
    ===================================================================== */
+function statGet(c, pid, key){
+  const st = state.stats[c];
+  if (!st || !st.players) return null;
+  const row = st.players[String(pid)];
+  if (!row) return null;
+  const i = st.keys.indexOf(key);
+  return i >= 0 ? (row[i] || 0) : null;
+}
+
+function computeStandings(c){
+  const full = state.calFull[c];
+  if (!full || !full.weeks) return null;
+  const table = new Map();
+  const row = id => {
+    id = String(id);
+    if (!table.has(id)) table.set(id, { id, pj:0, g:0, e:0, p:0, gf:0, gc:0, pts:0 });
+    return table.get(id);
+  };
+  for (const ms of Object.values(full.weeks)) {
+    for (const m of ms) {
+      if (m.localScore == null || m.visitorScore == null) continue;
+      const L = row(m.localId), V = row(m.visitorId);
+      L.pj++; V.pj++;
+      L.gf += m.localScore; L.gc += m.visitorScore;
+      V.gf += m.visitorScore; V.gc += m.localScore;
+      if (m.localScore > m.visitorScore) { L.g++; V.p++; L.pts += 3; }
+      else if (m.localScore < m.visitorScore) { V.g++; L.p++; V.pts += 3; }
+      else { L.e++; V.e++; L.pts++; V.pts++; }
+    }
+  }
+  // asegura que salgan todos los equipos de la liga aunque no hayan jugado
+  for (const ms of Object.values(full.weeks)) { for (const m of ms) { row(m.localId); row(m.visitorId); } }
+  return [...table.values()].sort((a,b) => b.pts - a.pts || (b.gf-b.gc) - (a.gf-a.gc) || b.gf - a.gf);
+}
+
+function zoneFor(c, pos, total){
+  if (c === "2") {
+    if (pos <= 2) return "zone-up";
+    if (pos <= 6) return "zone-po";
+    if (pos > total - 4) return "zone-down";
+  } else {
+    if (pos <= 4) return "zone-up";
+    if (pos <= 6) return "zone-po";
+    if (pos > total - 3) return "zone-down";
+  }
+  return "";
+}
+
+const RANKS = [
+  { id:"points", label:"Puntos" },
+  { id:"avg",    label:"Media" },
+  { id:"form",   label:"Forma" },
+  { id:"ppm",    label:"Pts/M€" },
+  { id:"rise",   label:"Revalorización €" },
+  { id:"risepct",label:"Revalorización %" },
+  { id:"value",  label:"Más caros" },
+  { id:"goals",  label:"Goles", needsStats:true },
+  { id:"assists",label:"Asistencias", needsStats:true },
+];
+
+function viewStats(){
+  const c = comp();
+  const tab = state.statsTab;
+  const chips = `<div class="chips-row no-scrollbar">
+    ${[["clasificacion","Clasificación"],["equipos","Equipos"],["rankings","Rankings"]].map(([id,l]) =>
+      `<button class="chip ${tab===id?"active":""}" onclick="state.statsTab='${id}';render()">${l}</button>`).join("")}
+  </div>`;
+
+  let body = "";
+  if (tab === "clasificacion") {
+    const rows = computeStandings(c);
+    if (!rows || !rows.length) body = `<div class="card"><div class="empty-state">Aún no hay resultados para calcular la clasificación</div></div>`;
+    else {
+      body = `<div class="card table-scroll"><table class="standings">
+        <tr><th></th><th class="name-col">Equipo</th><th>PJ</th><th>G</th><th>E</th><th>P</th><th>GF</th><th>GC</th><th>DG</th><th>Pts</th></tr>
+        ${rows.map((r,i) => { const t = state.teams.get(r.id) || {}; const z = zoneFor(c, i+1, rows.length);
+          return `<tr class="${z}"><td><span class="pos-n">${i+1}</span></td>
+          <td class="name-col"><img src="${esc(t.badgeColor||"")}" alt="" loading="lazy" onerror="this.style.display='none'">${esc(t.name||"?")}</td>
+          <td>${r.pj}</td><td>${r.g}</td><td>${r.e}</td><td>${r.p}</td><td>${r.gf}</td><td>${r.gc}</td>
+          <td class="${cls(r.gf-r.gc)}">${r.gf-r.gc>0?"+":""}${r.gf-r.gc}</td><td class="pts">${r.pts}</td></tr>`; }).join("")}
+      </table></div>
+      <div class="zone-legend">
+        ${c==="2" ? `<span><span class="zone-dot" style="background:var(--green)"></span>Ascenso directo</span>
+        <span><span class="zone-dot" style="background:var(--acc)"></span>Playoff</span>
+        <span><span class="zone-dot" style="background:var(--red)"></span>Descenso</span>`
+        : `<span><span class="zone-dot" style="background:var(--green)"></span>Champions</span>
+        <span><span class="zone-dot" style="background:var(--acc)"></span>Europa</span>
+        <span><span class="zone-dot" style="background:var(--red)"></span>Descenso</span>`}
+      </div>`;
+    }
+  } else if (tab === "equipos") {
+    const teamIds = [...new Set((state.players[c]||[]).map(p => String(p.teamId)))];
+    const rows = teamIds.map(id => {
+      const t = state.teams.get(id) || { name:"?" };
+      const ps = (state.players[c]||[]).filter(p => String(p.teamId) === id);
+      const value = ps.reduce((a,p)=>a+pVal(p),0);
+      const pts = ps.reduce((a,p)=>a+(p.points||0),0);
+      const top = [...ps].sort((a,b)=>(b.points||0)-(a.points||0))[0];
+      return { t, id, strength: teamStrength(c, id), value, pts, top };
+    }).sort((a,b) => b.strength - a.strength);
+    body = `<div class="card table-scroll"><table class="standings">
+      <tr><th></th><th class="name-col">Equipo</th><th>Fuerza</th><th>Pts fantasy</th><th>Valor plantilla</th><th class="name-col">Jugador top</th></tr>
+      ${rows.map((r,i) => `<tr><td><span class="pos-n">${i+1}</span></td>
+        <td class="name-col"><img src="${esc(r.t.badgeColor||"")}" alt="" loading="lazy" onerror="this.style.display='none'">${esc(r.t.name)}</td>
+        <td class="pts">${r.strength.toLocaleString("es-ES",{maximumFractionDigits:1})}</td>
+        <td>${nfES.format(r.pts)}</td>
+        <td>${fmtM(r.value)} €</td>
+        <td class="name-col" style="cursor:pointer" onclick="openPlayer('${r.top?.id}')">${esc(r.top?.nickname||"—")} (${r.top?.points||0})</td></tr>`).join("")}
+    </table></div>
+    <div class="zone-legend"><span>Fuerza = media de puntos fantasy de los 8 mejores del equipo</span></div>`;
+  } else {
+    const hasStats = !!state.stats[c];
+    const ranks = RANKS.filter(r => !r.needsStats || hasStats);
+    if (!ranks.some(r => r.id === state.rankTab)) state.rankTab = "points";
+    const rt = state.rankTab;
+    const pool = (state.players[c]||[]).filter(p => p.playerStatus !== "out_of_league");
+    const val = {
+      points: p => p.points||0, avg: p => p.averagePoints||0, form: p => form3(p), ppm: p => ppm(p),
+      rise: p => deltas(c, p.id).d0, risepct: p => { const d = deltas(c,p.id).d0, v = pVal(p); return v-d>0 ? d/(v-d)*100 : 0; },
+      value: p => pVal(p), goals: p => statGet(c, p.id, "goals")||0, assists: p => statGet(c, p.id, "goal_assist")||0,
+    }[rt];
+    const fmtV = {
+      points: v => nfES.format(v) + " pts", avg: v => v.toLocaleString("es-ES",{maximumFractionDigits:1}), form: v => v.toLocaleString("es-ES",{maximumFractionDigits:1}),
+      ppm: v => v.toLocaleString("es-ES",{maximumFractionDigits:1}) + " pts/M€", rise: v => fmtMSign(v), risepct: v => (v>0?"+":"") + v.toLocaleString("es-ES",{maximumFractionDigits:1}) + " %",
+      value: v => fmtM(v) + " €", goals: v => v + (v===1?" gol":" goles"), assists: v => v + (v===1?" asistencia":" asistencias"),
+    }[rt];
+    const top = pool.map(p => ({ p, v: val(p) })).filter(x => x.v !== 0 || rt === "points")
+      .sort((a,b) => b.v - a.v).slice(0, 15);
+    body = `<div class="chips-row no-scrollbar">
+      ${ranks.map(r => `<button class="chip ${rt===r.id?"active":""}" onclick="state.rankTab='${r.id}';render()">${r.label}</button>`).join("")}
+    </div>
+    <div class="card">${top.length ? top.map((x,i) =>
+      `<div style="display:flex;align-items:center"><div style="width:34px;text-align:center;flex-shrink:0"><span class="pos-n">${i+1}</span></div><div style="flex:1;min-width:0">${playerRow(x.p, { reason: `<b style="color:var(--acc)">${fmtV(x.v)}</b>` })}</div></div>`).join("")
+      : `<div class="empty-state">Sin datos para este ranking</div>`}</div>`;
+  }
+  return updatedLine() + chips + body;
+}
+
+/* =====================================================================
+   VISTA: CALENDARIO
+   ===================================================================== */
+function viewCalendario(){
+  const c = comp();
+  const full = state.calFull[c];
+  const curWeek = state.meta?.comps?.[c]?.weekNumber || 1;
+  if (!full || !full.weeks || !Object.keys(full.weeks).length) {
+    return updatedLine() + `<div class="card"><div class="empty-state"><div class="big">📅</div>El calendario completo aún no está descargado.<br>Aparecerá tras la próxima actualización de datos.</div></div>`;
+  }
+  const weekNums = Object.keys(full.weeks).map(Number).sort((a,b)=>a-b);
+  if (!state.calWeek || !full.weeks[String(state.calWeek)]) state.calWeek = curWeek;
+  const w = state.calWeek;
+  const ms = [...(full.weeks[String(w)] || [])].sort((a,b) => new Date(a.matchDate) - new Date(b.matchDate));
+
+  const groups = new Map();
+  for (const m of ms) {
+    const d = new Date(m.matchDate);
+    const key = d.toLocaleDateString("es-ES", { weekday:"long", day:"numeric", month:"long" });
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(m);
+  }
+  const played = ms.filter(m => m.localScore != null).length;
+
+  return updatedLine() + `
+  <div class="week-chips no-scrollbar" id="weekChips">
+    ${weekNums.map(n => `<button class="week-chip ${n===w?"sel":""} ${n===curWeek?"cur":""}" onclick="state.calWeek=${n};render()">J${n}</button>`).join("")}
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    <h3 style="font-size:16px;font-weight:800">Jornada ${w}</h3>
+    ${w === curWeek ? `<span class="badge acc">actual</span>` : ""}
+    <span style="font-size:11.5px;color:var(--text-3)">${played}/${ms.length} jugados</span>
+  </div>
+  ${[...groups.entries()].map(([day, list]) =>
+    `<div class="day-lbl">${day}</div><div class="card">${list.map(matchRow).join("")}</div>`).join("")}`;
+}
 function openPlayer(pid){
   const c = comp();
   const p = state.byId[c].get(String(pid));
@@ -1203,6 +1596,42 @@ function openPlayer(pid){
       </div></div>`;
   }
 
+  // posición en los rankings de la liga
+  const pool = (state.players[c] || []);
+  const rankPts = pool.filter(x => (x.points||0) > (p.points||0)).length + 1;
+  const rankVal = pool.filter(x => pVal(x) > val).length + 1;
+
+  // récords de valor de la temporada
+  let recHtml = "";
+  if (hist.length > 1) {
+    let mx = hist[0], mn = hist[0];
+    for (const e of hist) { if (e[1] > mx[1]) mx = e; if (e[1] < mn[1]) mn = e; }
+    const lblD = e => { const s = String(e[0]); return s.slice(6,8) + "/" + s.slice(4,6); };
+    recHtml = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:var(--text-3)">
+      <span class="badge">máx ${fmtM(mx[1])} € · ${lblD(mx)}</span>
+      <span class="badge">mín ${fmtM(mn[1])} € · ${lblD(mn)}</span>
+      <span class="badge">nº ${rankPts} en puntos</span>
+      <span class="badge">nº ${rankVal} en valor</span>
+    </div>`;
+  }
+
+  // estadísticas de temporada (del volcado diario de la API)
+  let seasonHtml = "";
+  const mins = statGet(c, pid, "mins_played");
+  if (mins != null) {
+    const g = statGet(c, pid, "goals"), a = statGet(c, pid, "goal_assist");
+    const ya = statGet(c, pid, "yellow_card"), ro = statGet(c, pid, "red_card");
+    const isPor = String(p.positionId) === "1";
+    const cells = [
+      miniStat(nfES.format(mins), "Minutos"),
+      isPor ? miniStat(statGet(c, pid, "saves") ?? 0, "Paradas") : miniStat(g ?? 0, g === 1 ? "Gol" : "Goles"),
+      isPor ? miniStat(statGet(c, pid, "goals_conceded") ?? 0, "Encajados") : miniStat(a ?? 0, "Asistencias"),
+      miniStat((ya ?? 0) + " / " + (ro ?? 0), "Amar. / Rojas"),
+    ];
+    seasonHtml = `<div class="chart-card"><h4>Temporada</h4><div class="mini-stats" style="margin:0">${cells.join("")}</div></div>`;
+  }
+
+  window._modalPid = String(pid);
   openModal(`
     ${modalHead(esc(p.nickname))}
     <div class="modal-body">
@@ -1227,13 +1656,22 @@ function openPlayer(pid){
       </div>
       ${ownHtml}
       ${sigHtml}
-      <div class="chart-card"><h4>Valor de mercado</h4>${sparkline(hist)}</div>
+      ${seasonHtml}
+      <div class="chart-card">
+        <div class="chart-head"><h4>Valor de mercado</h4>
+          <div class="seg">
+            ${[[7,"7D"],[30,"1M"],[0,"Todo"]].map(([n,l]) => `<button class="${(window._chartRange ?? 0)===n?"sel":""}" onclick="setChartRange(${n})">${l}</button>`).join("")}
+          </div>
+        </div>
+        <div id="valueChart">${sparkline(hist, window._chartRange ?? 0)}</div>
+        ${recHtml}
+      </div>
       ${wp.length ? `<div class="chart-card"><h4>Puntos por jornada</h4><div class="bars">${bars}</div></div>` : ""}
       <div class="modal-actions">
         ${entry
           ? `<button class="btn-acc" onclick="openSell('${entry.id}')">Vender</button>`
           : `<button class="btn-acc" onclick="openBuy('${p.id}')">Fichar</button>`}
-        <button class="btn-ghost" onclick="toggleWatch('${p.id}')">${isWatched(pid) ? "Dejar de vigilar" : "Vigilar"}</button>
+        <button class="btn-ghost" onclick="openWatchModal('${p.id}')">${IC.target.replace('class="ic"','class="ic" style="width:14px;height:14px"')} ${isWatched(pid) ? "Objetivo" : "Vigilar"}</button>
       </div>
       <a class="btn-ghost" style="width:100%;margin-top:9px;text-decoration:none" target="_blank" rel="noopener"
          href="https://www.sofascore.com/es/search?q=${encodeURIComponent(p.nickname)}">
@@ -1242,9 +1680,20 @@ function openPlayer(pid){
 }
 function miniStat(n, l){ return `<div class="mini-stat"><div class="n">${n}</div><div class="l">${l}</div></div>`; }
 
-function sparkline(hist){
+function setChartRange(n){
+  window._chartRange = n;
+  const c = comp();
+  const hist = (state.history[c] || {})[window._modalPid] || [];
+  const el = document.getElementById("valueChart");
+  if (el) el.innerHTML = sparkline(hist, n);
+  document.querySelectorAll(".chart-head .seg button").forEach(b =>
+    b.classList.toggle("sel", b.textContent === (n===7?"7D":n===30?"1M":"Todo")));
+}
+
+function sparkline(hist, rangeDays){
   if (!hist || hist.length < 2) return `<div style="font-size:12px;color:var(--text-3);padding:12px 0">Aún no hay histórico suficiente. Se irá acumulando cada día.</div>`;
-  const pts = hist.slice(-90);
+  const pts = rangeDays ? hist.slice(-rangeDays) : hist.slice(-120);
+  if (pts.length < 2) return `<div style="font-size:12px;color:var(--text-3);padding:12px 0">Sin datos suficientes en este rango.</div>`;
   const vals = pts.map(e => e[1]);
   const min = Math.min(...vals), max = Math.max(...vals);
   const range = (max - min) || 1;
@@ -1272,16 +1721,104 @@ function sparkline(hist){
   </div>`;
 }
 
-function toggleWatch(pid){
-  pid = String(pid);
-  const w = state.watch[comp()];
-  const i = w.indexOf(pid);
-  if (i >= 0) { w.splice(i,1); toast("Quitado de vigilados"); }
-  else { w.push(pid); toast("Añadido a vigilados", "ok"); }
-  persist();
-  vibrate(10);
-  closeModal();
-  render();
+/* --- objetivos de mercado (vigilados con precio objetivo) --- */
+function openWatchModal(pid){
+  const c = comp();
+  const p = state.byId[c].get(String(pid));
+  if (!p) return;
+  const w = watchEntry(pid);
+  const val = pVal(p);
+  openModal(`
+    ${modalHead((w ? "Objetivo · " : "Vigilar a ") + esc(p.nickname))}
+    <div class="modal-body">
+      <div class="card" style="padding:11px 14px;margin-bottom:14px;font-size:13px">
+        Valor actual: <b>${fmt(val)}</b>
+      </div>
+      <div class="field"><label>Avisarme cuando…</label>
+        <select id="wDir">
+          <option value="below" ${(!w || w.dir !== "above") ? "selected" : ""}>baje hasta el precio objetivo (para fichar)</option>
+          <option value="above" ${(w && w.dir === "above") ? "selected" : ""}>suba hasta el precio objetivo (para vender)</option>
+        </select>
+      </div>
+      ${moneyInput("wTarget", "Precio objetivo (opcional)", w && w.target ? w.target : "", "Sin precio, queda solo como vigilado")}
+      <div class="hint" style="font-size:11.5px;color:var(--text-3);margin-bottom:12px" id="wHint"></div>
+      <button class="btn-acc" style="width:100%" id="wGo">${w ? "Guardar objetivo" : "Vigilar"}</button>
+      ${w ? `<button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" id="wDel">Dejar de vigilar</button>` : ""}
+    </div>`, ov => {
+      const inp = ov.querySelector("#wTarget");
+      bindMoney(inp);
+      const hint = ov.querySelector("#wHint");
+      const updHint = () => {
+        const t = moneyVal(inp);
+        if (!t) { hint.textContent = ""; return; }
+        const diff = t - val;
+        hint.innerHTML = `Distancia al objetivo: <b class="${cls(diff)}">${fmtMSign(diff)}</b> (${val ? Math.abs(diff/val*100).toLocaleString("es-ES",{maximumFractionDigits:1}) : "?"} %)`;
+      };
+      inp.addEventListener("input", updHint); updHint();
+      ov.querySelector("#wGo").addEventListener("click", () => {
+        const target = moneyVal(inp) || null;
+        const dir = ov.querySelector("#wDir").value;
+        const list = state.watch[c];
+        const entry = watchEntry(pid);
+        if (entry) { entry.target = target; entry.dir = target ? dir : null; entry.notifiedAt = null; }
+        else list.push({ pid: String(pid), target, dir: target ? dir : null, createdAt: todayISO(), notifiedAt: null });
+        persist(); vibrate(10); closeModal();
+        toast(target ? "Objetivo guardado: " + fmtM(target) + " €" : "Añadido a vigilados", "ok");
+        render();
+        maybeAskNotifPermission();
+      });
+      const del = ov.querySelector("#wDel");
+      if (del) del.addEventListener("click", () => {
+        state.watch[c] = state.watch[c].filter(x => String(x.pid) !== String(pid));
+        persist(); closeModal(); toast("Quitado de vigilados"); render();
+      });
+    });
+}
+
+function checkTargets(opts){
+  // comprueba objetivos de las dos ligas; avisa una sola vez por objetivo
+  let hits = [];
+  for (const c of ["1","2"]) {
+    for (const w of state.watch[c]) {
+      const p = (state.byId[c] || new Map()).get(String(w.pid));
+      if (!p) continue;
+      if (targetReached(w, pVal(p))) {
+        if (!w.notifiedAt) {
+          w.notifiedAt = new Date().toISOString();
+          hits.push({ p, w, c });
+        }
+      } else if (w.notifiedAt) {
+        w.notifiedAt = null; // se desanda: podrá avisar de nuevo
+      }
+    }
+  }
+  if (hits.length) {
+    persist();
+    for (const h of hits) {
+      const msg = h.p.nickname + " ha llegado a tu objetivo: " + fmt(pVal(h.p));
+      toast("🎯 " + msg, "ok");
+      sysNotify("🎯 Objetivo de mercado", msg);
+    }
+    if (!opts || !opts.silent) vibrate(30);
+  }
+  return hits.length;
+}
+
+function sysNotify(title, body){
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const opts = { body, icon: "icon-192.png", badge: "icon-192.png" };
+  navigator.serviceWorker?.getRegistration().then(reg => {
+    if (reg && reg.showNotification) reg.showNotification(title, opts);
+    else { try { new Notification(title, opts); } catch(e){} }
+  }).catch(() => { try { new Notification(title, opts); } catch(e){} });
+}
+function maybeAskNotifPermission(){
+  if (!("Notification" in window) || Notification.permission !== "default") return;
+  setTimeout(() => {
+    if (confirm("¿Quieres que el navegador te avise cuando un jugador llegue a tu precio objetivo? (funciona con la app abierta)")) {
+      Notification.requestPermission();
+    }
+  }, 400);
 }
 
 /* =====================================================================
@@ -1594,6 +2131,9 @@ function openMenu(){
         Última publicación: <b>${updated}</b><br><br>
         Tu plantilla, movimientos y vigilados se guardan <b>en este dispositivo</b>. Usa Exportar para hacer copia o pasarlos a otro móvil.
       </div>
+      ${("Notification" in window) ? (Notification.permission === "granted"
+        ? `<div class="badge green" style="margin-bottom:12px">${IC.bell.replace('class="ic"','class="ic" style="width:12px;height:12px"')} Avisos de objetivos activados</div>`
+        : `<button class="btn-ghost" style="width:100%;margin-bottom:9px" onclick="Notification.requestPermission().then(()=>{closeModal();openMenu()})">${IC.bell.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Activar avisos de objetivos</button>`) : ""}
       <button class="btn-acc" style="width:100%" onclick="exportData()">Exportar mis datos</button>
       <button class="btn-ghost" style="width:100%;margin-top:9px" onclick="document.getElementById('importFile').click()">Importar datos</button>
       <button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" onclick="wipeData()">Borrar todos mis datos</button>
@@ -1646,13 +2186,34 @@ function wipeData(){
 /* =====================================================================
    ARRANQUE
    ===================================================================== */
-document.getElementById("modeSwitch").addEventListener("click", e => {
-  const b = e.target.closest("button");
-  if (b) setMode(b.dataset.m);
-});
+for (const id of ["modeSwitch", "modeSwitchSide"]) {
+  document.getElementById(id)?.addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (b) setMode(b.dataset.m);
+  });
+}
 document.getElementById("btnTheme").addEventListener("click", toggleTheme);
+document.getElementById("btnThemeSide")?.addEventListener("click", toggleTheme);
 document.getElementById("btnMenu").addEventListener("click", openMenu);
+document.getElementById("btnMenuSide")?.addEventListener("click", openMenu);
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+/* --- refresco automático: si data/ se ha republicado, recarga sin tocar nada --- */
+let _lastMetaAt = null;
+async function autoCheck(){
+  if (!state.meta) return;
+  try {
+    const m = await fetchJSON("data/meta.json");
+    if (_lastMetaAt === null) _lastMetaAt = state.meta.updatedAt;
+    if (m.updatedAt !== _lastMetaAt) {
+      _lastMetaAt = m.updatedAt;
+      await loadAll();
+      render();
+      checkTargets();
+      toast("Datos actualizados automáticamente", "ok");
+    }
+  } catch(e) { /* sin red: lo intentamos más tarde */ }
+}
 
 (function init(){
   const theme = localStorage.getItem(LS.theme);
@@ -1662,6 +2223,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal()
   renderNav();
   loadAll().then(() => {
     render();
+    checkTargets({ silent: true });
   }).catch(err => {
     document.getElementById("main").innerHTML =
       `<div class="empty-state"><div class="big">📡</div>No se pudieron cargar los datos.<br>
@@ -1670,6 +2232,17 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal()
   });
   // refresco del contador de jornada cada minuto
   setInterval(() => { if (state.view === "resumen" && state.meta) render(); }, 60000);
+  // comprobación de datos nuevos: cada 5 min con jornada en vivo, cada 15 si no
+  setInterval(() => {
+    const live = state.meta?.comps?.[comp()]?.isLive;
+    const mins = Math.floor(Date.now() / 60000);
+    if (mins % (live ? 5 : 15) === 0) autoCheck();
+  }, 60000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) autoCheck(); });
+  // service worker: notificaciones en Android + app instalable
+  if ("serviceWorker" in navigator && location.protocol === "https:") {
+    navigator.serviceWorker.register("sw.js").catch(()=>{});
+  }
 })();
 </script>
 </body>

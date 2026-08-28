@@ -7,8 +7,12 @@ Seguimiento de **LaLiga Fantasy** (oficial) con dos modos:
 
 ## Qué hace
 
-- **Resumen**: jornada actual, tu economía (invertido, valor, beneficio latente y realizado), alertas de lesionados/sancionados de tu plantilla, jugadores vigilados, top subidas/bajadas del día y calendario de la jornada.
-- **Mercado**: todos los jugadores de la competición con valor de mercado, puntos, media, forma, puntos por millón y variaciones de precio (hoy / 7 días). Filtros por posición y equipo. Ficha de cada jugador con gráfico del histórico de valor y puntos por jornada.
+- **Resumen**: jornada actual, tu economía (invertido, valor, beneficio latente y realizado), alertas de lesionados/sancionados de tu plantilla, objetivos alcanzados, top subidas/bajadas del día y partidos de la jornada.
+- **Mercado**: todos los jugadores de la competición con valor de mercado, puntos, media, forma, puntos por millón y variaciones de precio (hoy / 7 días). Filtros por posición y equipo. Ficha de cada jugador con gráficas (valor con rangos 7D/1M/todo, puntos por jornada, puntos acumulados), señales y estadísticas de temporada.
+- **Consejos**: señales de inversión calculadas de los datos (rachas de subida, chollos por puntos/millón, forma, avisos de venta sobre tu plantilla, caídas fuertes).
+- **Objetivos**: jugadores ojeados con precio objetivo; cuando el valor llega a tu objetivo, la app avisa al abrirla o actualizarse (notificación del navegador si le das permiso).
+- **Estadísticas**: clasificación de la liga calculada de los resultados, y líderes de temporada (goles, asistencias, minutos, paradas, tarjetas, rentabilidad).
+- **Calendario**: todas las jornadas de la temporada con horarios y resultados.
 - **Mi Plantilla**: añade los jugadores que compras con su precio real de compra; la app calcula la plusvalía de cada uno contra su valor de mercado actual. Al vender, indicas el precio y el beneficio queda registrado.
 - **Movimientos**: libro de compras y ventas con beneficio realizado y ROI.
 
