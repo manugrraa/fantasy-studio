@@ -2160,8 +2160,15 @@ async function buildSocialUrl(){
   return `${AUTHCFG.authorizeBase}?${params.toString()}`;
 }
 async function socialExchange(pastedUrl){
-  const m = String(pastedUrl).match(/[?&#]code=([^&\s]+)/);
-  if (!m) throw new Error("No encuentro el código en ese enlace. Copia la barra de direcciones ENTERA de la página jwt.ms.");
+  const raw = String(pastedUrl).trim();
+  const errM = raw.match(/[?&#]error_description=([^&\s]+)/);
+  if (errM) {
+    const msg = decodeURIComponent(errM[1].replace(/\+/g, " ")).split("Correlation")[0];
+    throw new Error("LaLiga devolvió un error: " + msg);
+  }
+  // acepta la URL completa de jwt.ms o el código suelto pegado a mano
+  const m = raw.match(/[?&#]code=([^&\s]+)/) || (/^[A-Za-z0-9._~-]{20,}$/.test(raw) ? [null, raw] : null);
+  if (!m) throw new Error("Ahí no viene el código. En la pestaña de jwt.ms, TOCA la barra de direcciones (se desplegará la dirección completa), cópiala entera y pégala aquí.");
   const code = decodeURIComponent(m[1]);
   const saved = JSON.parse(sessionStorage.getItem("fs_pkce") || "{}");
   if (!saved.verifier) throw new Error("Sesión de login caducada. Pulsa de nuevo «Entrar con Google» y repite.");
@@ -2586,8 +2593,10 @@ async function startSocial(){
     <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
       <div style="font-size:12.5px;color:var(--text-2);line-height:1.55;margin-bottom:10px">
         Se ha abierto la página de LaLiga en otra pestaña. Inicia sesión con tu método de siempre.
-        Al terminar verás una página en blanco de <b>jwt.ms</b>: <b>copia su dirección web entera</b>
-        (la barra de arriba del navegador) y pégala aquí:
+        Al terminar verás una página de <b>jwt.ms</b> (puede parecer vacía — es normal).<br><br>
+        <b>1.</b> En esa pestaña, <b>toca la barra de direcciones</b> de arriba: aunque solo se lea
+        «jwt.ms», al tocarla se despliega la dirección completa (larga, con <b>code=</b> dentro).<br>
+        <b>2.</b> Cópiala entera (en el móvil: mantén pulsado → Seleccionar todo → Copiar) y pégala aquí:
       </div>
       <div class="field" style="margin-bottom:10px">
         <input id="socialUrl" placeholder="https://jwt.ms/?code=…" autocomplete="off" inputmode="url">
