@@ -1250,11 +1250,22 @@ function viewResumen(){
   const week = state.meta?.comps?.[c];
   const players = state.players[c] || [];
 
-  // top subidas/bajadas del día
-  const withD = players.map(p => ({ p, d: deltas(c, p.id).d1 })).filter(x => x.d !== 0);
+  // top subidas/bajadas del día. Tras medianoche el pipeline ya ha escrito la
+  // fila de hoy pero el juego aún no ha cambiado los valores (llegan de
+  // madrugada): todos los d1 son 0. En ese caso enseñamos el último cambio real.
+  let topLbl = "hoy";
+  let withD = players.map(p => ({ p, d: deltas(c, p.id).d1 })).filter(x => x.d !== 0);
+  if (withD.length < 3) {
+    topLbl = "último día";
+    withD = players.map(p => {
+      const h = (state.history[c] || {})[String(p.id)];
+      return { p, d: h && h.length >= 3 ? h[h.length-2][1] - h[h.length-3][1] : 0 };
+    }).filter(x => x.d !== 0);
+  }
   withD.sort((a,b) => b.d - a.d);
   const ups = withD.slice(0,5).filter(x => x.d > 0);
   const downs = withD.slice(-5).reverse().filter(x => x.d < 0);
+  const topNote = topLbl !== "hoy" && withD.length ? `<div style="font-size:10.5px;color:var(--text-3);margin:6px 4px 0">Los valores de hoy aún no han salido (llegan de madrugada): estos son los últimos cambios reales.</div>` : "";
 
   // alertas de plantilla
   const alerts = state.squad[c]
@@ -1327,14 +1338,15 @@ function viewResumen(){
 
   <div class="two-col">
     <div>
-      <div class="section-title"><span class="up">▲</span> Top subidas hoy</div>
-      <div class="card">${ups.length ? ups.map(x => playerRow(x.p, { sub:"d1" })).join("") : `<div class="empty-state" style="padding:24px">Sin cambios hoy todavía</div>`}</div>
+      <div class="section-title"><span class="up">▲</span> Top subidas ${topLbl}</div>
+      <div class="card">${ups.length ? ups.map(x => playerRow(x.p, { reason: `<span class="delta-pill ${cls(x.d)}">${fmtMSign(x.d)}</span>` })).join("") : `<div class="empty-state" style="padding:24px">Sin cambios todavía</div>`}</div>
     </div>
     <div>
-      <div class="section-title"><span class="down">▼</span> Top bajadas hoy</div>
-      <div class="card">${downs.length ? downs.map(x => playerRow(x.p, { sub:"d1" })).join("") : `<div class="empty-state" style="padding:24px">Sin cambios hoy todavía</div>`}</div>
+      <div class="section-title"><span class="down">▼</span> Top bajadas ${topLbl}</div>
+      <div class="card">${downs.length ? downs.map(x => playerRow(x.p, { reason: `<span class="delta-pill ${cls(x.d)}">${fmtMSign(x.d)}</span>` })).join("") : `<div class="empty-state" style="padding:24px">Sin cambios todavía</div>`}</div>
     </div>
   </div>
+  ${topNote}
   ${matchesHtml}`;
 }
 
