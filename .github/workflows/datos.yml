@@ -5,7 +5,7 @@ on:
     # Cada 15 minutos: la app va casi en tiempo real (puntos en jornada, estados,
     # valores de madrugada). El script solo commitea si algo cambió, y las
     # estadísticas pesadas (1 petición/jugador) solo se bajan una vez al día.
-    - cron: "*/15 * * * *"
+    - cron: "6,21,36,51 * * * *"
   workflow_dispatch:
 
 permissions:
