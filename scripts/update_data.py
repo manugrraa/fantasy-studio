@@ -40,7 +40,12 @@ SEED_DELAY = 0.12
 
 
 def get(path, retries=3):
-    url = BASE + path
+    # La API va detrás de CloudFront con caché de hasta 8 h (max-age=28800):
+    # sin esto, el workflow puede recibir valores viejos justo tras la 01:00,
+    # que es cuando el juego publica los nuevos. Un parámetro único por
+    # petición fuerza a la CDN a ir siempre al origen.
+    bust = f"_ts={int(time.time() * 1000)}"
+    url = BASE + path + ("&" if "?" in path else "?") + bust
     for i in range(retries):
         try:
             req = urllib.request.Request(url, headers=HDRS)
