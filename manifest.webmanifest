@@ -10,5 +10,31 @@
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Mercado de mi liga",
+      "short_name": "Mi mercado",
+      "url": "./?view=liga&tab=mercado",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Mercado general",
+      "short_name": "Mercado",
+      "url": "./?view=mercado",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Mi Plantilla",
+      "short_name": "Plantilla",
+      "url": "./?view=plantilla",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Consejos de hoy",
+      "short_name": "Consejos",
+      "url": "./?view=consejos",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
   ]
 }

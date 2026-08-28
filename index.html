@@ -3755,6 +3755,97 @@ function payClauseUI(i){
     authFetch(`/api/v1/competition/${c}/league/${L}/buyout/${ch.pm.id}/pay`, { method: "POST", body: { buyoutClauseToPay: ch.clause } }));
 }
 
+/* =====================================================================
+   COMPARADOR DE MÁNAGERS: yo contra un rival
+   ===================================================================== */
+function managerStyle(c, tid, row, avgOps){
+  const act = state.actFull[c];
+  const maps = managerMaps(c);
+  let claus = 0;
+  for (const raw of act?.items || []) {
+    const a = parseAct(raw);
+    if (a.type === 32 && actTeam(a, maps, 1) === String(tid)) claus++;
+  }
+  const ops = row.nBuys + row.nSells;
+  if (claus >= 2) return "🔒 Clausulador";
+  if (ops <= 2) return "🧘 Pasivo";
+  if (ops >= avgOps * 1.6) return "🔄 Mercadillo andante";
+  return "⚖ Equilibrado";
+}
+
+function teamProfitSum(c, tid, team, pmap, startInt){
+  let sum = 0, n = 0;
+  for (const x of (team?.players || team?.playerTeams || [])) {
+    const pm = x.playerMaster || x.player || x;
+    const pid = String(pm.id ?? "");
+    const local = state.byId[c].get(pid);
+    const val = local ? pVal(local) : (pm.marketValue != null ? +pm.marketValue : null);
+    const paid = pmap[tid + ":" + pid] ?? (startInt ? histValueAt(c, pid, startInt) : null);
+    if (val != null && paid != null) { sum += val - paid; n++; }
+  }
+  return { sum, n };
+}
+
+async function openManagerCompare(tid){
+  const c = comp();
+  const B = computeBudgets(c);
+  if (!B) { toast("Abre Rivales primero", "err"); return; }
+  const me = B.rows.find(r => r.isMe);
+  const riv = B.rows.find(r => String(r.tid) === String(tid));
+  if (!me || !riv) { toast("No encuentro tu equipo en la clasificación", "err"); return; }
+  const cache = state.rivalTeams[c] || (state.rivalTeams[c] = {});
+  const sel = state.myLeague[c];
+  for (const t of [String(me.tid), String(riv.tid)]) {
+    if (!cache[t] && !(t === String(sel.teamId) && state.liga.data[c]?.team)) {
+      try { cache[t] = await authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/teams/${t}?x-lang=es`); }
+      catch(e) { cache[t] = { error: e.message }; }
+    }
+  }
+  const myTeam = cache[String(me.tid)] || state.liga.data[c]?.team;
+  const rivTeam = cache[String(riv.tid)];
+  const act = state.actFull[c];
+  const pmap = purchaseMap(c);
+  const dates = (act?.items || []).map(a => { const dt = parseAct(a).date; return dt ? +String(dt).slice(0,10).replace(/-/g,"") : null; }).filter(Boolean);
+  const startInt = dates.length ? Math.min(...dates) : null;
+  const pMe = teamProfitSum(c, String(me.tid), myTeam, pmap, startInt);
+  const pRiv = teamProfitSum(c, String(riv.tid), rivTeam, pmap, startInt);
+  const avgOps = B.rows.reduce((a, r) => a + r.nBuys + r.nSells, 0) / (B.rows.length || 1);
+  const wealth = r => r.budget + (r.teamValue || 0);
+
+  const rows = [
+    ["Posición", "#" + me.pos, "#" + riv.pos, riv.pos - me.pos],
+    ["Puntos", me.points, riv.points, me.points - riv.points],
+    ["Valor de equipo", fmtM(me.teamValue || 0), fmtM(riv.teamValue || 0), (me.teamValue||0) - (riv.teamValue||0)],
+    ["Presupuesto", fmtM(me.budget), fmtM(riv.budget), me.budget - riv.budget],
+    ["Patrimonio total", fmtM(wealth(me)), fmtM(wealth(riv)), wealth(me) - wealth(riv)],
+    ["Compras", `${me.nBuys} · ${fmtM(me.buys)}`, `${riv.nBuys} · ${fmtM(riv.buys)}`, 0],
+    ["Ventas", `${me.nSells} · ${fmtM(me.sells)}`, `${riv.nSells} · ${fmtM(riv.sells)}`, 0],
+    ["Premios de jornada", "+" + fmtM(me.extra), "+" + fmtM(riv.extra), me.extra - riv.extra],
+    ["Profit de su plantilla", pMe.n ? fmtMSign(pMe.sum) : "—", pRiv.n ? fmtMSign(pRiv.sum) : "—", (pMe.n ? pMe.sum : 0) - (pRiv.n ? pRiv.sum : 0)],
+    ["Estilo", managerStyle(c, me.tid, me, avgOps), managerStyle(c, riv.tid, riv, avgOps), 0],
+  ];
+  openModal(`
+    ${modalHead("🆚 Duelo de mánagers")}
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;margin-bottom:14px;text-align:center">
+        <div><div style="font-size:14px;font-weight:800">${esc(me.manager || me.name)}</div><div style="font-size:10.5px;color:var(--acc)">TÚ</div></div>
+        <div style="font-size:16px;font-weight:800;color:var(--text-3)">VS</div>
+        <div><div style="font-size:14px;font-weight:800">${esc(riv.manager || riv.name)}</div><div style="font-size:10.5px;color:var(--text-3)">${esc(riv.name)}</div></div>
+      </div>
+      <div class="card" style="overflow:hidden">
+        ${rows.map(([lbl, va, vb, diff]) => `
+          <div style="display:grid;grid-template-columns:1fr 118px 1fr;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:12.5px;font-variant-numeric:tabular-nums;align-items:center">
+            <div style="text-align:right;font-weight:${diff > 0 ? 800 : 500};color:${diff > 0 ? "var(--green)" : "var(--text-2)"}">${va}</div>
+            <div style="text-align:center;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-3)">${lbl}</div>
+            <div style="text-align:left;font-weight:${diff < 0 ? 800 : 500};color:${diff < 0 ? "var(--green)" : "var(--text-2)"}">${vb}</div>
+          </div>`).join("")}
+      </div>
+      <div style="font-size:10.5px;color:var(--text-3);margin-top:10px;line-height:1.5">
+        Profit de plantilla = valor actual − lo pagado por cada jugador (≈ para los de plantilla inicial). En verde, quien gana cada duelo.
+      </div>
+    </div>`);
+}
+
 /* --- pestaña: rivales (presupuestos, equipos y profit) --- */
 function ligaTabRivales(c, d){
   const act = state.actFull[c];
@@ -3795,6 +3886,7 @@ function ligaTabRivales(c, d){
       else {
         const players = team.players || team.playerTeams || [];
         bodyHtml = `<div class="rival-body">
+          ${!r.isMe ? `<div style="padding:10px 14px 0"><button class="btn-ghost" style="width:100%" onclick="event.stopPropagation();openManagerCompare('${r.tid}')">🆚 Comparar conmigo</button></div>` : ""}
           <div class="budget-line" style="padding-top:10px"><span>Compras (${r.nBuys})</span><b class="down">−${fmtM(r.buys)}</b></div>
           <div class="budget-line"><span>Ventas (${r.nSells})</span><b class="up">+${fmtM(r.sells)}</b></div>
           ${r.extra ? `<div class="budget-line"><span>${B.hasPrizes ? "Premios de jornada (reales)" : `Premios estimados (${r.points} pts)`}</span><b class="up">+${fmtM(r.extra)}</b></div>` : ""}
@@ -4133,9 +4225,32 @@ async function autoCheck(){
       await loadAll();
       render();
       checkTargets();
+      updateBadge();
       toast("Datos actualizados automáticamente", "ok");
     }
   } catch(e) { /* sin red: lo intentamos más tarde */ }
+}
+
+/* badge en el icono de la app (iOS 16.4+ instalada y Android):
+   nº de objetivos alcanzados + jugadores tuyos con movimiento fuerte hoy */
+function updateBadge(){
+  if (!("setAppBadge" in navigator)) return;
+  try {
+    let n = 0;
+    for (const cc of ["1", "2"]) {
+      for (const w of state.watch[cc] || []) {
+        if (!w.target) continue;
+        const p = state.byId[cc]?.get(String(w.pid));
+        if (p && targetReached(w, pVal(p))) n++;
+      }
+      for (const e of state.squad[cc] || []) {
+        if (e.custom) continue;
+        if (Math.abs(deltas(cc, e.pid).d1) >= 400000) n++;
+      }
+    }
+    if (n > 0) navigator.setAppBadge(n);
+    else if (navigator.clearAppBadge) navigator.clearAppBadge();
+  } catch(e) { /* navegador sin badges */ }
 }
 
 (function init(){
@@ -4143,10 +4258,20 @@ async function autoCheck(){
   if (theme) document.documentElement.dataset.theme = theme;
   applyThemeBtn();
   applyMode();
+  // enlaces profundos de los accesos directos: ?view=liga&tab=mercado, etc.
+  try {
+    const q = new URLSearchParams(location.search);
+    const v = q.get("view");
+    if (v && VIEWS.some(x => x.id === v)) state.view = v;
+    const tb = q.get("tab");
+    if (tb) state.ligaTab = tb;
+    if (v) history.replaceState(null, "", location.pathname);
+  } catch(e){}
   renderNav();
   loadAll().then(() => {
     render();
     checkTargets({ silent: true });
+    updateBadge();
   }).catch(err => {
     document.getElementById("main").innerHTML =
       `<div class="empty-state"><div class="big">📡</div>No se pudieron cargar los datos.<br>
