@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-title" content="Fantasy">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23090909'/%3E%3Cg transform='skewX(-8)'%3E%3Ctext x='39' y='45' text-anchor='middle' font-family='Arial,sans-serif' font-weight='900' font-size='31' fill='%232EC8FF' stroke='%23F2F0E4' stroke-width='1' paint-order='stroke'%3EFS%3C/text%3E%3C/g%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23090909'/%3E%3Cg transform='skewX(-8)'%3E%3Ctext x='39' y='45' text-anchor='middle' font-family='Arial,sans-serif' font-weight='900' font-size='31' fill='%232BEFD9' stroke='%23BFFAF0' stroke-width='1' paint-order='stroke'%3EFS%3C/text%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -37,6 +37,7 @@
   }
   /* ---- MODO HYPERMOTION (por defecto): azul eléctrico ---- */
   html[data-mode="hyper"] {
+    --logo: #2BEFD9;
     --acc: #2EC8FF;
     --acc-bright: #7FDFFF;
     --acc-dim: #12688c;
@@ -48,6 +49,7 @@
   }
   /* ---- MODO LALIGA (EA Sports): rojo coral ---- */
   html[data-mode="laliga"] {
+    --logo: #F14049;
     --acc: #FF4B44;
     --acc-bright: #FF8177;
     --acc-dim: #99231e;
@@ -177,7 +179,10 @@
     background: var(--header-bg); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
     border-top: 1px solid var(--border); display: flex;
     padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    transform: translate3d(0,0,0); /* capa propia: la barra no se mueve al hacer scroll */
   }
+  /* con el teclado abierto la barra se oculta (si no, iOS la deja flotando a media pantalla) */
+  body.kb-open .bottom-nav { display: none; }
   @media (min-width: 761px) { .bottom-nav { display: none; } }
   .bottom-nav button {
     flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
@@ -483,7 +488,7 @@
 
 <header class="topbar">
   <div class="topbar-inner">
-    <div class="logo-mark"><svg viewBox="0 0 64 64"><g transform="skewX(-8)"><text x="38" y="45" text-anchor="middle" font-family="'Sora','Inter',sans-serif" font-weight="800" font-size="34" letter-spacing="-1.5" fill="var(--acc)" stroke="var(--text)" stroke-width="1" paint-order="stroke">FS</text></g></svg></div>
+    <div class="logo-mark"><svg viewBox="0 0 64 64"><g transform="skewX(-8)"><text x="38" y="45" text-anchor="middle" font-family="'Sora','Inter',sans-serif" font-weight="800" font-size="34" letter-spacing="-1.5" fill="var(--logo, var(--acc))" stroke="var(--text)" stroke-width="1" paint-order="stroke">FS</text></g></svg></div>
     <div class="brand">
       <h1>Fantasy Studio</h1>
       <div class="sub" id="modeSub">LaLiga Hypermotion</div>
@@ -501,7 +506,7 @@
 
 <aside class="sidebar" id="sidebar">
   <div class="side-brand">
-    <div class="logo-mark"><svg viewBox="0 0 64 64"><g transform="skewX(-8)"><text x="38" y="45" text-anchor="middle" font-family="'Sora','Inter',sans-serif" font-weight="800" font-size="34" letter-spacing="-1.5" fill="var(--acc)" stroke="var(--text)" stroke-width="1" paint-order="stroke">FS</text></g></svg></div>
+    <div class="logo-mark"><svg viewBox="0 0 64 64"><g transform="skewX(-8)"><text x="38" y="45" text-anchor="middle" font-family="'Sora','Inter',sans-serif" font-weight="800" font-size="34" letter-spacing="-1.5" fill="var(--logo, var(--acc))" stroke="var(--text)" stroke-width="1" paint-order="stroke">FS</text></g></svg></div>
     <div class="brand">
       <h1 style="font-size:15px;font-weight:800">Fantasy Studio</h1>
       <div class="sub" id="modeSubSide" style="font-size:10px;font-weight:600;color:var(--acc);text-transform:uppercase;letter-spacing:.8px">LaLiga Hypermotion</div>
@@ -540,7 +545,7 @@
    GitHub Actions. Plantilla, movimientos y vigilados viven en localStorage.
    ===================================================================== */
 
-const LS = { mode:"fs_mode", theme:"fs_theme", squad:"fs_squad_v1", moves:"fs_moves_v1", watch:"fs_watch_v1", cache:"fs_cache_v1" };
+const LS = { mode:"fs_mode", theme:"fs_theme", squad:"fs_squad_v1", moves:"fs_moves_v1", watch:"fs_watch_v1", cache:"fs_cache_v1", worker:"fs_worker", auth:"fs_auth_v1", league:"fs_league_v1" };
 const API_BASE = "https://fantasy-api.llt-services.com/api";
 const PROXIES = [
   u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
@@ -586,6 +591,11 @@ const state = {
   rankTab: "points",
   calWeek: null,
   liveAt: null,
+  // cuenta Fantasy enlazada
+  workerUrl: localStorage.getItem("fs_worker") || "",
+  auth: null,           // tokens de sesión (se carga tras definir load())
+  myLeague: {},         // comp -> {leagueId, name, teamId}
+  liga: { loading:false, data:{}, errors:[] },
 };
 
 // migración de vigilados v1 (array de ids) a objetivos v2 (objetos con precio objetivo)
@@ -593,6 +603,8 @@ for (const c of ["1","2"]) {
   state.watch[c] = (state.watch[c] || []).map(w =>
     typeof w === "string" ? { pid: w, target: null, dir: null, createdAt: null, notifiedAt: null } : w);
 }
+state.auth = load(LS.auth, null);
+state.myLeague = load(LS.league, {});
 
 function comp() { return MODES[state.mode].comp; }
 function load(key, def) { try { const v = JSON.parse(localStorage.getItem(key)); return v ?? def; } catch(e){ return def; } }
@@ -843,6 +855,8 @@ const IC = {
   gear:  '<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.5a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.5h4l.4-2.5a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>',
   bell:  '<svg class="ic" viewBox="0 0 24 24"><path d="M18 9a6 6 0 1 0-12 0c0 6-2.5 7-2.5 7h17S18 15 18 9"/><path d="M10 20a2.2 2.2 0 0 0 4 0"/></svg>',
   target:'<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>',
+  user:  '<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.7-6 8-6s6.5 2 8 6"/></svg>',
+  lock:  '<svg class="ic" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
 };
 
 /* ---------- toast ---------- */
@@ -891,14 +905,15 @@ function moneyVal(el){ return parseInt(el.value.replace(/\D/g, "") || "0", 10); 
 const VIEWS = [
   { id:"resumen",    label:"Resumen",      short:"Resumen",   icon:IC.home },
   { id:"mercado",    label:"Mercado",      short:"Mercado",   icon:IC.market },
+  { id:"liga",       label:"Mi Liga",      short:"Mi Liga",   icon:IC.user },
   { id:"consejos",   label:"Consejos",     short:"Consejos",  icon:IC.bulb },
   { id:"stats",      label:"Estadísticas", short:"Stats",     icon:IC.chart },
   { id:"calendario", label:"Calendario",   short:"Calendario",icon:IC.cal },
   { id:"plantilla",  label:"Mi Plantilla", short:"Plantilla", icon:IC.shirt },
   { id:"movs",       label:"Movimientos",  short:"Movs",      icon:IC.moves },
 ];
-const BOTTOM_IDS = ["resumen","mercado","plantilla","movs"]; // + botón Más
-const MORE_IDS = ["consejos","stats","calendario"];
+const BOTTOM_IDS = ["resumen","mercado","liga","plantilla"]; // + botón Más
+const MORE_IDS = ["consejos","stats","calendario","movs"];
 
 function renderNav(){
   document.getElementById("desktopTabs").innerHTML = VIEWS.map(v =>
@@ -962,6 +977,7 @@ function render(){
   const main = document.getElementById("main");
   if (state.view === "resumen")    main.innerHTML = viewResumen();
   if (state.view === "mercado")    main.innerHTML = viewMercado();
+  if (state.view === "liga")       main.innerHTML = viewLiga();
   if (state.view === "consejos")   main.innerHTML = viewConsejos();
   if (state.view === "stats")      main.innerHTML = viewStats();
   if (state.view === "calendario") main.innerHTML = viewCalendario();
@@ -2104,6 +2120,432 @@ function delMove(id){
 }
 
 /* =====================================================================
+   CUENTA FANTASY: login oficial + servidor puente + MI LIGA
+   El login va DIRECTO navegador -> login.laliga.es (servidor oficial B2C,
+   admite CORS). La contraseña no pasa por ningún otro sitio y no se guarda.
+   Las llamadas de datos con tu sesión van por TU Cloudflare Worker.
+   ===================================================================== */
+const AUTHCFG = {
+  tokenBase: "https://login.laliga.es/laligadspprob2c.onmicrosoft.com/oauth2/v2.0/token",
+  loginPolicy: "B2C_1A_ResourceOwnerv2",
+  altPolicy: "B2C_1A_5ULAIP_PARAMETRIZED_SIGNIN",
+  clientId: "af88bcff-1157-40a0-b579-030728aacf0b",
+  redirect: "authredirect://com.lfp.laligafantasy",
+};
+function saveAuth(a){
+  state.auth = a;
+  if (a) localStorage.setItem(LS.auth, JSON.stringify(a));
+  else localStorage.removeItem(LS.auth);
+}
+function authValid(){ return !!(state.auth?.access_token && (state.auth.expAt || 0) > Date.now() + 60000); }
+
+async function fantasyLogin(email, pass){
+  const body = new URLSearchParams({
+    grant_type: "password", client_id: AUTHCFG.clientId,
+    scope: `openid ${AUTHCFG.clientId} offline_access`,
+    redirect_uri: AUTHCFG.redirect, username: email, password: pass, response_type: "id_token",
+  });
+  const r = await fetch(`${AUTHCFG.tokenBase}?p=${AUTHCFG.loginPolicy}`, {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body,
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.access_token) {
+    const raw = (d.error_description || d.error || "Error de conexión con LaLiga").split("\r")[0];
+    throw new Error(raw.includes("AADB2C90225") ? "Email o contraseña incorrectos" : raw);
+  }
+  d.expAt = Date.now() + ((+d.expires_in || 3000) * 1000);
+  d.policy = AUTHCFG.loginPolicy;
+  saveAuth(d);
+  return d;
+}
+
+async function fantasyRefresh(){
+  const rt = state.auth?.refresh_token;
+  if (!rt) { saveAuth(null); throw new Error("Sesión caducada, vuelve a iniciar sesión"); }
+  for (const pol of [state.auth.policy || AUTHCFG.loginPolicy, AUTHCFG.altPolicy]) {
+    try {
+      const body = new URLSearchParams({
+        grant_type: "refresh_token", refresh_token: rt,
+        client_id: AUTHCFG.clientId, scope: `openid ${AUTHCFG.clientId} offline_access`,
+      });
+      const r = await fetch(`${AUTHCFG.tokenBase}?p=${pol}`, {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.access_token) {
+        d.expAt = Date.now() + ((+d.expires_in || 3000) * 1000);
+        d.policy = pol;
+        if (!d.refresh_token) d.refresh_token = rt;
+        saveAuth(d);
+        return d;
+      }
+    } catch(e) { /* probamos la otra política */ }
+  }
+  saveAuth(null);
+  throw new Error("No se pudo renovar la sesión, vuelve a iniciar sesión");
+}
+
+function fantasyLogout(){
+  saveAuth(null);
+  state.liga = { loading:false, data:{}, errors:[] };
+  render();
+  toast("Sesión cerrada");
+}
+
+async function authFetch(path, opts){
+  if (!state.workerUrl) throw new Error("Falta configurar el servidor puente");
+  if (!state.auth) throw new Error("Inicia sesión primero");
+  if (!authValid()) await fantasyRefresh();
+  const doFetch = () => fetch(state.workerUrl.replace(/\/+$/, "") + path, {
+    method: (opts && opts.method) || "GET",
+    headers: {
+      "Authorization": "Bearer " + state.auth.access_token, "x-lang": "es",
+      ...(opts && opts.body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: opts && opts.body ? JSON.stringify(opts.body) : undefined,
+    signal: AbortSignal.timeout(15000),
+  });
+  let r = await doFetch();
+  if (r.status === 401) { await fantasyRefresh(); r = await doFetch(); }
+  const text = await r.text();
+  let data = null;
+  try { data = text.trim() ? JSON.parse(text) : null; } catch(e) { data = text; }
+  if (!r.ok) {
+    const err = new Error(`HTTP ${r.status} en ${path.split("?")[0]}`);
+    err.status = r.status; err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+const unwrapList = d => Array.isArray(d) ? d : (Array.isArray(d?.elements) ? d.elements : (Array.isArray(d?.leagues) ? d.leagues : []));
+
+async function loadLiga(force){
+  const c = comp();
+  const st = state.liga;
+  if (st.loading) return;
+  if (!force && st.data[c] && Date.now() - (st.data[c].at || 0) < 120000) return;
+  if (!state.workerUrl || !state.auth) return;
+  st.loading = true; st.errors = [];
+  if (state.view === "liga") render();
+  const out = { at: Date.now() };
+  const errs = [];
+  const step = async (key, fn) => {
+    try { out[key] = await fn(); }
+    catch(e) {
+      errs.push({ key, msg: e.message, extra: (typeof e.data === "object" && e.data) ? JSON.stringify(e.data).slice(0, 200) : String(e.data || "").slice(0, 200) });
+    }
+  };
+
+  await step("me", () => authFetch("/api/v4/user/me?x-lang=es"));
+  await step("leagues", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/leagues?x-lang=es`)));
+  const leagues = out.leagues || [];
+  let sel = state.myLeague[c];
+  if (!sel || !leagues.some(l => String(l.id) === String(sel.leagueId))) {
+    const l0 = leagues[0];
+    sel = l0 ? { leagueId: String(l0.id), name: l0.name || "Mi liga", teamId: null } : null;
+  }
+  if (sel) {
+    const lg = leagues.find(l => String(l.id) === String(sel.leagueId));
+    const tid = lg?.team?.id ?? lg?.teamId ?? null;
+    if (tid) sel.teamId = String(tid);
+    sel.name = lg?.name || sel.name;
+    state.myLeague[c] = sel;
+    localStorage.setItem(LS.league, JSON.stringify(state.myLeague));
+
+    await step("standing", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/standing?x-lang=es`)));
+
+    // si la liga no traía mi teamId, lo buscamos en la clasificación por el manager
+    if (!sel.teamId && out.standing && out.me) {
+      const meId = out.me.id ?? out.me.userId ?? null;
+      const meName = out.me.managerName ?? out.me.nickname ?? out.me.name ?? null;
+      const row = out.standing.find(r => {
+        const m = (r.team && r.team.manager) || r.manager || {};
+        return (meId && String(m.id ?? m.userId) === String(meId)) || (meName && (m.managerName === meName || m.name === meName));
+      });
+      const rid = row?.team?.id ?? row?.teamId ?? null;
+      if (rid) { sel.teamId = String(rid); localStorage.setItem(LS.league, JSON.stringify(state.myLeague)); }
+    }
+
+    await step("market", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/league/${sel.leagueId}/market?x-lang=es`)));
+    await step("activity", () => authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/activity/0?x-lang=es`));
+    if (sel.teamId) {
+      await step("money", () => authFetch(`/api/v1/competition/${c}/teams/${sel.teamId}/money?x-lang=es`));
+      await step("team", () => authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/teams/${sel.teamId}?x-lang=es`));
+    }
+  }
+  st.data[c] = out;
+  st.errors = errs;
+  st.loading = false;
+  if (state.view === "liga") render();
+}
+
+function ligaMoney(m){
+  if (m == null) return null;
+  if (typeof m === "number") return m;
+  return m.teamMoney ?? m.money ?? m.balance ?? null;
+}
+
+function ligaPlayerRow(pm, right){
+  // fila de jugador de la liga: usa nuestra ficha si el jugador está en la BD local
+  const c = comp();
+  const pid = String(pm?.id ?? "");
+  const local = state.byId[c]?.get(pid);
+  const name = pm?.nickname || pm?.name || local?.nickname || "Jugador";
+  const img = pm?.images?.transparent?.["256x256"] || pm?.image || local?.image || "";
+  const pos = POS[String(pm?.positionId ?? local?.positionId ?? "3")] || POS["3"];
+  const t = local ? teamOf(local) : null;
+  return `<div class="p-row" ${local ? `onclick="openPlayer('${pid}')"` : ""}>
+    <img class="p-photo" loading="lazy" src="${esc(img)}" alt="" onerror="this.style.visibility='hidden'">
+    <div class="p-main">
+      <div class="p-name">${esc(name)}</div>
+      <div class="p-meta"><span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
+        ${t ? `<img src="${esc(t.badgeColor)}" alt="" loading="lazy"> ${esc(t.shortName || t.name)}` : ""}</div>
+    </div>
+    ${right || ""}
+  </div>`;
+}
+
+function viewLiga(){
+  const c = comp();
+
+  // Paso 1: servidor puente
+  if (!state.workerUrl) {
+    return `
+    <div class="section-title">${IC.user.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Mi Liga — configuración (solo una vez)</div>
+    <div class="card" style="padding:16px;margin-bottom:12px;font-size:13px;line-height:1.6;color:var(--text-2)">
+      Para enlazar tu cuenta hace falta un <b>servidor puente propio y gratuito</b> (Cloudflare Worker),
+      porque la API del Fantasy solo acepta peticiones desde su web. Tu contraseña <b>nunca</b> pasa por él:
+      el login va directo a los servidores de LaLiga.<br><br>
+      <b>1.</b> Crea cuenta en <a href="https://dash.cloudflare.com" target="_blank" rel="noopener" style="color:var(--acc)">dash.cloudflare.com</a> (gratis)<br>
+      <b>2.</b> «Workers y Pages» → «Crear» → «Crear Worker» → nómbralo <b>fantasy-proxy</b> → Implementar<br>
+      <b>3.</b> «Editar código» → borra lo que haya y pega
+      <a href="https://github.com/manugrraa/fantasy-studio/blob/main/worker/fantasy-proxy.js" target="_blank" rel="noopener" style="color:var(--acc)">este código</a> → Implementar<br>
+      <b>4.</b> Copia la URL del worker y pégala aquí:
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="field"><label>URL de tu Worker</label>
+        <input id="workerUrl" placeholder="https://fantasy-proxy.tu-subdominio.workers.dev" autocomplete="off" inputmode="url">
+      </div>
+      <button class="btn-acc" style="width:100%" onclick="saveWorkerUrl()">Guardar y continuar</button>
+    </div>`;
+  }
+
+  // Paso 2: login
+  if (!state.auth) {
+    return `
+    <div class="section-title">${IC.lock.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Iniciar sesión en LaLiga Fantasy</div>
+    <div class="card" style="padding:16px">
+      <div class="field"><label>Email de tu cuenta LaLiga</label>
+        <input id="loginEmail" type="email" autocomplete="username" placeholder="tu@email.com"></div>
+      <div class="field"><label>Contraseña</label>
+        <input id="loginPass" type="password" autocomplete="current-password" placeholder="••••••••"></div>
+      <button class="btn-acc" style="width:100%" id="loginGo" onclick="doLogin()">Entrar</button>
+      <div style="font-size:11.5px;color:var(--text-3);margin-top:12px;line-height:1.5">
+        ${IC.lock.replace('class="ic"','class="ic" style="width:11px;height:11px;vertical-align:-1.5px"')}
+        La contraseña viaja cifrada y <b>solo</b> al servidor oficial de LaLiga (login.laliga.es). No se guarda
+        en ningún sitio; aquí solo queda la sesión, en este dispositivo. Si entras con Google en la app oficial,
+        necesitas crear una contraseña en tu cuenta LaLiga primero.
+      </div>
+      <button class="btn-ghost" style="width:100%;margin-top:12px" onclick="changeWorkerUrl()">Cambiar servidor puente</button>
+    </div>`;
+  }
+
+  // Paso 3: datos de mi liga
+  const d = state.liga.data[c];
+  const sel = state.myLeague[c];
+  if (!d) {
+    setTimeout(() => loadLiga(), 30);
+    return `<div class="skeleton">${state.liga.loading ? "Cargando tu liga…" : "Conectando…"}</div>`;
+  }
+
+  const me = d.me || {};
+  const myName = me.managerName || me.nickname || me.name || "Mánager";
+  const leagues = d.leagues || [];
+  const money = ligaMoney(d.money);
+
+  const headHtml = `
+  <div class="card" style="padding:13px 15px;margin-bottom:12px;display:flex;align-items:center;gap:11px;flex-wrap:wrap">
+    ${IC.user.replace('class="ic"','class="ic" style="width:20px;height:20px;color:var(--acc)"')}
+    <div style="flex:1;min-width:130px">
+      <div style="font-size:14px;font-weight:700">${esc(myName)}</div>
+      <div style="font-size:11.5px;color:var(--text-3)">${sel ? esc(sel.name) : "Sin liga en esta competición"}</div>
+    </div>
+    <button class="icon-btn" onclick="loadLiga(true)" title="Recargar">${state.liga.loading ? IC.refresh.replace('class="ic"','class="ic spinning"') : IC.refresh}</button>
+    <button class="btn-ghost" style="padding:8px 12px;font-size:12px" onclick="fantasyLogout()">Salir</button>
+  </div>
+  ${leagues.length > 1 ? `<div class="chips-row no-scrollbar">${leagues.map(l =>
+    `<button class="chip ${sel && String(l.id) === String(sel.leagueId) ? "active" : ""}" onclick="pickLeague('${esc(String(l.id))}')">${esc(l.name || "Liga")}</button>`).join("")}</div>` : ""}`;
+
+  if (!leagues.length) {
+    return headHtml + `<div class="card"><div class="empty-state"><div class="big">🏝️</div>
+      No se ha encontrado ninguna liga tuya en ${MODES[state.mode].label}.<br>
+      Prueba a cambiar de modo arriba, o recarga.</div></div>
+      ${diagHtml()}`;
+  }
+
+  // dinero + resumen
+  const moneyHtml = `<div class="stat-grid" style="margin-bottom:4px">
+    ${statTile("Dinero disponible", money != null ? fmtM(money) + " €" : "—", "")}
+    ${statTile("Mercado de hoy", (d.market || []).length + " jugadores", "")}
+  </div>`;
+
+  // mercado diario
+  const marketHtml = (d.market || []).length ? `
+    <div class="section-title">Mercado de hoy en mi liga</div>
+    <div class="card">${d.market.map(it => {
+      const pm = it.playerMaster || it.player || it;
+      const price = it.salePrice ?? it.price ?? pm.marketValue ?? 0;
+      const bids = it.numberOfBids ?? it.bids ?? null;
+      const seller = it.sellerTeam?.manager?.managerName || it.sellerTeam?.name || null;
+      const exp = it.expirationDate || it.expiration || null;
+      return ligaPlayerRow(pm, `<div class="p-right">
+        <div class="p-val">${fmtM(+price)} €</div>
+        <div class="p-sub">${bids != null ? bids + (bids === 1 ? " puja" : " pujas") : ""}${seller ? " · " + esc(seller) : (exp ? " · hasta " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : "")}</div>
+      </div>`);
+    }).join("")}</div>` : "";
+
+  // mi equipo real
+  const teamPlayers = d.team ? (d.team.players || d.team.playerTeams || []) : [];
+  const teamHtml = teamPlayers.length ? `
+    <div class="section-title">Mi equipo real (${teamPlayers.length})
+      <button style="margin-left:auto;color:var(--acc);font-size:11.5px;font-weight:700" onclick="importLigaSquad()">Importar a Mi Plantilla ›</button>
+    </div>
+    <div class="card">${teamPlayers.map(x => {
+      const pm = x.playerMaster || x.player || x;
+      const clause = x.buyoutClause ?? null;
+      const val = pm.marketValue ?? null;
+      return ligaPlayerRow(pm, `<div class="p-right">
+        <div class="p-val">${val != null ? fmtM(+val) + " €" : ""}</div>
+        <div class="p-sub">${clause != null ? "cláusula " + fmtM(+clause) : ""}</div>
+      </div>`);
+    }).join("")}</div>` : "";
+
+  // clasificación de mi liga
+  const standHtml = (d.standing || []).length ? `
+    <div class="section-title">Clasificación de mi liga</div>
+    <div class="card table-scroll"><table class="standings" style="min-width:340px">
+      <tr><th style="width:30px">#</th><th class="name-col">Equipo</th><th>Puntos</th><th>Valor</th></tr>
+      ${d.standing.map((r, i) => {
+        const team = r.team || r;
+        const isMe = sel && sel.teamId && String(team.id) === String(sel.teamId);
+        const mgr = team.manager?.managerName || team.manager?.name || "";
+        return `<tr ${isMe ? 'style="background:var(--acc-soft)"' : ""}>
+          <td><span class="pos-n">${r.position ?? i + 1}</span></td>
+          <td class="name-col">${esc(team.name || mgr || "Equipo")}${mgr && team.name ? `<div style="font-size:10.5px;color:var(--text-3);font-weight:500">${esc(mgr)}</div>` : ""}</td>
+          <td class="pts">${r.points ?? r.teamPoints ?? "—"}</td>
+          <td>${team.teamValue != null ? fmtM(+team.teamValue) : "—"}</td>
+        </tr>`;
+      }).join("")}
+    </table></div>` : "";
+
+  // actividad reciente de la liga
+  const actList = unwrapList(d.activity) || [];
+  const actHtml = actList.length ? `
+    <div class="section-title">Actividad reciente</div>
+    <div class="card">${actList.slice(0, 15).map(a => {
+      const pm = a.playerMaster || a.player || null;
+      const who = a.team?.manager?.managerName || a.team?.name || a.managerName || "";
+      const kind = a.title || a.type || a.operation || "";
+      const amount = a.money ?? a.amount ?? a.price ?? null;
+      const when = a.date || a.createdAt || null;
+      return `<div class="mv-row">
+        <div class="mv-icon ${/venta|sale|sell/i.test(kind) ? "sell" : "buy"}">${/venta|sale|sell/i.test(kind) ? IC.upar : IC.down}</div>
+        <div class="p-main">
+          <div class="p-name">${esc(pm?.nickname || pm?.name || kind || "Operación")}</div>
+          <div class="p-meta">${esc(String(kind))}${who ? " · " + esc(who) : ""}${when ? " · " + fmtDate(when) : ""}</div>
+        </div>
+        ${amount != null ? `<div class="p-right"><div class="p-val">${fmtM(+amount)} €</div></div>` : ""}
+      </div>`;
+    }).join("")}</div>` : "";
+
+  return headHtml + moneyHtml + marketHtml + teamHtml + standHtml + actHtml + diagHtml() +
+    `<div style="font-size:11px;color:var(--text-3);margin-top:14px;line-height:1.5">
+      Solo lectura de momento: pujar y vender desde aquí llegará cuando confirmemos que todo lo que ves cuadra con la app oficial.
+    </div>`;
+}
+
+function diagHtml(){
+  const errs = state.liga.errors || [];
+  if (!errs.length) return "";
+  return `<div class="section-title" style="color:var(--orange)">Diagnóstico (${errs.length})</div>
+  <div class="card" style="padding:12px 14px;font-size:11.5px;color:var(--text-2);line-height:1.6">
+    ${errs.map(e => `<div style="margin-bottom:6px"><b>${esc(e.key)}</b>: ${esc(e.msg)}${e.extra ? `<br><span style="color:var(--text-3)">${esc(e.extra)}</span>` : ""}</div>`).join("")}
+    <div style="color:var(--text-3);margin-top:6px">Haz captura de esto si algo no carga y pásasela a Claude.</div>
+  </div>`;
+}
+
+function saveWorkerUrl(){
+  const el = document.getElementById("workerUrl");
+  let v = (el?.value || "").trim();
+  if (v && !/^https?:\/\//.test(v)) v = "https://" + v;
+  if (!v || !v.includes(".workers.dev")) {
+    if (!v || !confirm("Esa URL no parece de un Cloudflare Worker (*.workers.dev). ¿Usarla igualmente?")) { toast("Revisa la URL del Worker", "err"); return; }
+  }
+  state.workerUrl = v.replace(/\/+$/, "");
+  localStorage.setItem(LS.worker, state.workerUrl);
+  toast("Servidor puente guardado", "ok");
+  render();
+}
+function changeWorkerUrl(){
+  const v = prompt("URL de tu Cloudflare Worker:", state.workerUrl);
+  if (v === null) return;
+  state.workerUrl = v.trim().replace(/\/+$/, "");
+  localStorage.setItem(LS.worker, state.workerUrl);
+  render();
+}
+async function doLogin(){
+  const email = document.getElementById("loginEmail")?.value.trim();
+  const pass = document.getElementById("loginPass")?.value;
+  const btn = document.getElementById("loginGo");
+  if (!email || !pass) { toast("Pon email y contraseña", "err"); return; }
+  btn.disabled = true; btn.textContent = "Entrando…";
+  try {
+    await fantasyLogin(email, pass);
+    toast("Sesión iniciada", "ok");
+    vibrate(14);
+    state.liga = { loading:false, data:{}, errors:[] };
+    render();
+    loadLiga(true);
+  } catch(e) {
+    toast(e.message, "err");
+    btn.disabled = false; btn.textContent = "Entrar";
+  }
+}
+function pickLeague(id){
+  const c = comp();
+  const d = state.liga.data[c];
+  const lg = (d?.leagues || []).find(l => String(l.id) === String(id));
+  state.myLeague[c] = { leagueId: String(id), name: lg?.name || "Mi liga", teamId: lg?.team?.id ? String(lg.team.id) : null };
+  localStorage.setItem(LS.league, JSON.stringify(state.myLeague));
+  state.liga.data[c] = null;
+  render();
+  loadLiga(true);
+}
+function importLigaSquad(){
+  const c = comp();
+  const d = state.liga.data[c];
+  const list = d?.team ? (d.team.players || d.team.playerTeams || []) : [];
+  if (!list.length) { toast("No hay equipo que importar", "err"); return; }
+  const nuevos = list.filter(x => { const pm = x.playerMaster || x.player || x; return pm?.id && !squadEntry(pm.id); });
+  if (!nuevos.length) { toast("Ya están todos en Mi Plantilla"); return; }
+  if (!confirm(`Se añadirán ${nuevos.length} jugadores a Mi Plantilla con su valor de mercado actual como precio de compra (edítalo luego si pagaste otra cosa). ¿Continuar?`)) return;
+  for (const x of nuevos) {
+    const pm = x.playerMaster || x.player || x;
+    const local = state.byId[c].get(String(pm.id));
+    const price = +(x.buyingPrice ?? x.purchasePrice ?? pm.marketValue ?? (local ? pVal(local) : 0)) || 0;
+    const entry = { id: uid(), pid: String(pm.id), name: pm.nickname || pm.name || (local?.nickname ?? "Jugador"),
+      pos: String(pm.positionId ?? local?.positionId ?? "3"), teamId: String(pm.teamId ?? local?.teamId ?? ""),
+      buyPrice: price, buyDate: todayISO(), custom: !local, imported: true };
+    state.squad[c].push(entry);
+    state.moves[c].push({ id: uid(), type:"buy", pid: entry.pid, name: entry.name, pos: entry.pos, price, date: entry.buyDate, linkedEntry: entry.id, imported: true });
+  }
+  persist();
+  toast(nuevos.length + " jugadores importados", "ok");
+  render();
+}
+
+/* =====================================================================
    MENÚ: EXPORTAR / IMPORTAR
    ===================================================================== */
 function openMenu(){
@@ -2119,6 +2561,7 @@ function openMenu(){
       ${("Notification" in window) ? (Notification.permission === "granted"
         ? `<div class="badge green" style="margin-bottom:12px">${IC.bell.replace('class="ic"','class="ic" style="width:12px;height:12px"')} Avisos de objetivos activados</div>`
         : `<button class="btn-ghost" style="width:100%;margin-bottom:9px" onclick="Notification.requestPermission().then(()=>{closeModal();openMenu()})">${IC.bell.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Activar avisos de objetivos</button>`) : ""}
+      <button class="btn-ghost" style="width:100%;margin-bottom:9px" onclick="closeModal();setView('liga')">${IC.user.replace('class="ic"','class="ic" style="width:14px;height:14px"')} ${state.auth ? "Mi Liga (cuenta conectada)" : "Enlazar mi cuenta del Fantasy"}</button>
       <button class="btn-acc" style="width:100%" onclick="exportData()">Exportar mis datos</button>
       <button class="btn-ghost" style="width:100%;margin-top:9px" onclick="document.getElementById('importFile').click()">Importar datos</button>
       <button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" onclick="wipeData()">Borrar todos mis datos</button>
@@ -2128,6 +2571,7 @@ function exportData(){
   const payload = {
     app: "FantasyStudio", version: 1, exportedAt: new Date().toISOString(),
     squad: state.squad, moves: state.moves, watch: state.watch,
+    league: state.myLeague, workerUrl: state.workerUrl || undefined, // la sesión (tokens) nunca se exporta
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
@@ -2148,6 +2592,8 @@ document.getElementById("importFile").addEventListener("change", async e => {
     state.squad = Object.assign({"1":[], "2":[]}, data.squad);
     state.moves = Object.assign({"1":[], "2":[]}, data.moves);
     state.watch = Object.assign({"1":[], "2":[]}, data.watch || {});
+    if (data.league) { state.myLeague = data.league; localStorage.setItem(LS.league, JSON.stringify(data.league)); }
+    if (data.workerUrl && !state.workerUrl) { state.workerUrl = data.workerUrl; localStorage.setItem(LS.worker, data.workerUrl); }
     persist();
     closeModal();
     render();
@@ -2225,6 +2671,17 @@ async function autoCheck(){
     if (mins % (live ? 2 : 5) === 0) autoCheck();
   }, 60000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) autoCheck(); });
+  // Mi Liga: refresco periódico suave (loadLiga ya limita a 1 vez cada 2 min)
+  setInterval(() => { if (state.view === "liga" && state.auth && !document.hidden) loadLiga(); }, 120000);
+  // barra inferior: se oculta mientras el teclado está abierto para que no "flote"
+  if (window.visualViewport) {
+    let baseH = window.visualViewport.height;
+    window.visualViewport.addEventListener("resize", () => {
+      const h = window.visualViewport.height;
+      if (h > baseH) baseH = h;
+      document.body.classList.toggle("kb-open", h < baseH * 0.78);
+    });
+  }
   // service worker: notificaciones en Android + app instalable
   if ("serviceWorker" in navigator && location.protocol === "https:") {
     navigator.serviceWorker.register("sw.js").catch(()=>{});
