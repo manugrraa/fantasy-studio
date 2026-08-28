@@ -2150,7 +2150,9 @@ async function pkcePair(){
 async function buildSocialUrl(){
   const { verifier, challenge } = await pkcePair();
   const stt = b64url(crypto.getRandomValues(new Uint8Array(12)));
-  sessionStorage.setItem("fs_pkce", JSON.stringify({ verifier, state: stt }));
+  // localStorage y no sessionStorage: en iOS, al saltar a Safari para el login,
+  // el sistema puede congelar la app instalada y perder la sesión temporal
+  localStorage.setItem("fs_pkce", JSON.stringify({ verifier, state: stt, at: Date.now() }));
   const params = new URLSearchParams({
     p: AUTHCFG.altPolicy, client_id: AUTHCFG.clientId, response_type: "code",
     redirect_uri: AUTHCFG.socialRedirect, scope: "openid offline_access",
@@ -2170,8 +2172,10 @@ async function socialExchange(pastedUrl){
   const m = raw.match(/[?&#]code=([^&\s]+)/) || (/^[A-Za-z0-9._~-]{20,}$/.test(raw) ? [null, raw] : null);
   if (!m) throw new Error("Ahí no viene el código. En la pestaña de jwt.ms, TOCA la barra de direcciones (se desplegará la dirección completa), cópiala entera y pégala aquí.");
   const code = decodeURIComponent(m[1]);
-  const saved = JSON.parse(sessionStorage.getItem("fs_pkce") || "{}");
-  if (!saved.verifier) throw new Error("Sesión de login caducada. Pulsa de nuevo «Entrar con Google» y repite.");
+  const saved = JSON.parse(localStorage.getItem("fs_pkce") || "{}");
+  if (!saved.verifier || (saved.at && Date.now() - saved.at > 30 * 60000)) {
+    throw new Error("Sesión de login caducada. Pulsa de nuevo «Entrar con Google» y repite.");
+  }
   const body = new URLSearchParams({
     grant_type: "authorization_code", client_id: AUTHCFG.clientId, code,
     redirect_uri: AUTHCFG.socialRedirect, code_verifier: saved.verifier, scope: "openid offline_access",
@@ -2188,7 +2192,7 @@ async function socialExchange(pastedUrl){
   }
   d.expAt = Date.now() + ((+d.expires_in || +d.id_token_expires_in || 3000) * 1000);
   d.policy = AUTHCFG.altPolicy;
-  sessionStorage.removeItem("fs_pkce");
+  localStorage.removeItem("fs_pkce");
   saveAuth(d);
   return d;
 }
@@ -2394,6 +2398,7 @@ function viewLiga(){
 
   // Paso 2: login
   if (!state.auth) {
+    setTimeout(prepareSocial, 30); // deja el enlace de Google listo ANTES del toque (Safari bloquea popups asíncronos)
     return `
     <div class="section-title">${IC.lock.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Iniciar sesión en LaLiga Fantasy</div>
     <div class="card" style="padding:16px;margin-bottom:12px">
@@ -2401,7 +2406,7 @@ function viewLiga(){
         <b>¿Entras al Fantasy con Google, Apple o Facebook?</b> Usa este botón. Se abre la página
         <b>oficial</b> de LaLiga para que inicies sesión como siempre; al terminar, copia el enlace y pégalo aquí.
       </div>
-      <button class="btn-acc" style="width:100%" onclick="startSocial()">${IC.user.replace('class="ic"','class="ic" style="width:16px;height:16px"')} Entrar con Google / Apple / Facebook</button>
+      <a class="btn-acc" id="socialLink" style="width:100%;text-decoration:none;opacity:.6;pointer-events:none" href="#" target="_blank" rel="noopener" onclick="return socialClicked()">${IC.user.replace('class="ic"','class="ic" style="width:16px;height:16px"')} Entrar con Google / Apple / Facebook</a>
       <div id="socialStep"></div>
     </div>
 
@@ -2587,31 +2592,39 @@ async function doLogin(){
     btn.disabled = false; btn.textContent = "Entrar";
   }
 }
-async function startSocial(){
-  let url;
-  try { url = await buildSocialUrl(); }
-  catch(e) { toast("Este navegador no permite el login seguro (PKCE). Prueba en Chrome/Safari.", "err"); return; }
-  window.open(url, "_blank", "noopener");
+/* Prepara el enlace de login ANTES de que el usuario toque: al ser un <a> con
+   href real, Safari (incluida la app instalada en pantalla de inicio) lo abre
+   siempre, sin bloqueador de ventanas emergentes. */
+async function prepareSocial(){
+  const a = document.getElementById("socialLink");
+  if (!a) return;
+  try {
+    a.href = await buildSocialUrl();
+    a.style.opacity = "";
+    a.style.pointerEvents = "";
+  } catch(e) {
+    a.textContent = "Este navegador no permite el login seguro (PKCE)";
+  }
+}
+function socialClicked(){
+  const a = document.getElementById("socialLink");
+  if (!a || !a.href || a.getAttribute("href") === "#") return false;
   const box = document.getElementById("socialStep");
-  if (box) box.innerHTML = `
+  if (box && !box.innerHTML) box.innerHTML = `
     <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
       <div style="font-size:12.5px;color:var(--text-2);line-height:1.55;margin-bottom:10px">
-        Se ha abierto la página de LaLiga en otra pestaña. Inicia sesión con tu método de siempre.
+        Se está abriendo la página de LaLiga. Inicia sesión con tu método de siempre.
         Al terminar verás una página de <b>jwt.ms</b> (puede parecer vacía — es normal).<br><br>
-        <b>1.</b> En esa pestaña, <b>toca la barra de direcciones</b> de arriba: aunque solo se lea
+        <b>1.</b> En esa página, <b>toca la barra de direcciones</b> de arriba: aunque solo se lea
         «jwt.ms», al tocarla se despliega la dirección completa (larga, con <b>code=</b> dentro).<br>
-        <b>2.</b> Cópiala entera (en el móvil: mantén pulsado → Seleccionar todo → Copiar) y pégala aquí:
+        <b>2.</b> Cópiala entera (mantén pulsado → Seleccionar todo → Copiar), vuelve aquí y pégala:
       </div>
       <div class="field" style="margin-bottom:10px">
         <input id="socialUrl" placeholder="https://jwt.ms/?code=…" autocomplete="off" inputmode="url">
       </div>
       <button class="btn-acc" style="width:100%" id="socialGo" onclick="finishSocial()">Terminar de conectar</button>
-      <div style="font-size:11px;color:var(--text-3);margin-top:9px">
-        ¿No se abrió la pestaña? <a href="${esc(url)}" target="_blank" rel="noopener" style="color:var(--acc)">Ábrela aquí</a>.
-      </div>
     </div>`;
-  const inp = document.getElementById("socialUrl");
-  if (inp) inp.focus();
+  return true; // deja que el enlace navegue (nueva pestaña / Safari)
 }
 async function finishSocial(){
   const inp = document.getElementById("socialUrl");
