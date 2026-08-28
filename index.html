@@ -747,7 +747,11 @@ async function liveRefresh(){
   const c = comp();
   const target = `${API_BASE}/v1/competition/${c}/players?x-lang=es`;
   let ok = false;
-  for (const wrap of PROXIES) {
+  // el Worker propio va primero: es fiable siempre; los proxies públicos quedan de respaldo
+  const sources = state.workerUrl
+    ? [u => state.workerUrl.replace(/\/+$/, "") + u.replace(API_BASE.replace("/api", ""), ""), ...PROXIES]
+    : PROXIES;
+  for (const wrap of sources) {
     try {
       const r = await fetch(wrap(target), { signal: AbortSignal.timeout(12000) });
       if (!r.ok) continue;
