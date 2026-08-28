@@ -1064,6 +1064,7 @@ function openModal(html, onMount){
 function closeModal(){
   document.getElementById("modalRoot").innerHTML = "";
   document.body.style.overflow = "";
+  window._matchOpen = null;
 }
 function modalHead(title){
   return `<div class="modal-head"><h3>${title}</h3><button class="modal-close" onclick="closeModal()">${IC.close}</button></div>`;
@@ -1274,7 +1275,7 @@ function viewResumen(){
   let matchesHtml = "";
   if (cal && (cal.matches || []).length) {
     const ms = [...cal.matches].sort((a,b) => new Date(a.matchDate) - new Date(b.matchDate));
-    matchesHtml = `<div class="section-title">Jornada ${cal.week} <button style="margin-left:auto;color:var(--acc);font-size:11.5px;font-weight:700" onclick="setView('calendario')">Ver calendario ›</button></div><div class="card">` + ms.map(matchRow).join("") + `</div>`;
+    matchesHtml = `<div class="section-title">Jornada ${cal.week} <button style="margin-left:auto;color:var(--acc);font-size:11.5px;font-weight:700" onclick="setView('calendario')">Ver calendario ›</button></div><div class="card">` + ms.map(m => matchRow(m, cal.week)).join("") + `</div>`;
   }
 
   return updatedLine() + `
@@ -1342,18 +1343,86 @@ function statTile(lbl, val, sub){
   return `<div class="card stat-tile"><div class="lbl">${lbl}</div><div class="val">${val}</div>${sub?`<div class="sub">${sub}</div>`:""}</div>`;
 }
 
-function matchRow(m){
+function matchRow(m, week){
   const l = state.teams.get(String(m.localId)) || { name:"?", shortName:"?" };
   const v = state.teams.get(String(m.visitorId)) || { name:"?", shortName:"?" };
   const finished = m.localScore != null && m.visitorScore != null;
   const mid = finished
     ? `<div class="score">${m.localScore} - ${m.visitorScore}</div>`
     : `<div>${fmtDate(m.matchDate)}</div><div>${new Date(m.matchDate).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</div>`;
-  return `<div class="match-row">
+  const wk = week ?? state.meta?.comps?.[comp()]?.weekNumber ?? 0;
+  return `<div class="match-row" style="cursor:pointer" onclick="openMatch(${+m.localId}, ${+m.visitorId}, ${+wk})">
     <div class="match-team"><img src="${esc(l.badgeColor||"")}" alt="" loading="lazy" onerror="this.style.display='none'"><span>${esc(l.name)}</span></div>
     <div class="match-mid">${mid}</div>
     <div class="match-team right"><img src="${esc(v.badgeColor||"")}" alt="" loading="lazy" onerror="this.style.display='none'"><span>${esc(v.name)}</span></div>
   </div>`;
+}
+
+/* ficha de un partido: MIS jugadores en él con sus puntos de la jornada en vivo */
+function openMatch(localId, visitorId, week){
+  const c = comp();
+  window._matchOpen = { localId, visitorId, week };
+  const l = state.teams.get(String(localId)) || { name: "?" };
+  const v = state.teams.get(String(visitorId)) || { name: "?" };
+  const m = ((state.calFull[c]?.weeks || {})[String(week)] || [])
+    .find(x => String(x.localId) === String(localId) && String(x.visitorId) === String(visitorId));
+  const finished = m && m.localScore != null && m.visitorScore != null;
+  const isCur = week === state.meta?.comps?.[c]?.weekNumber;
+  const live = isCur && !!state.meta?.comps?.[c]?.isLive && !finished;
+  const inMatch = p => String(p.teamId) === String(localId) || String(p.teamId) === String(visitorId);
+  const wpOf = p => { const wp = (p.weekPoints || []).find(x => x.weekNumber === week); return wp ? (wp.points || 0) : null; };
+  const badgeOf = p => String(p.teamId) === String(localId) ? l : v;
+  const lineupIds = new Set((state.lineup[c]?.ids || []).map(String));
+
+  const row = (p, extra) => {
+    const pts = wpOf(p);
+    return playerRow(p, { noSpark: true, reason:
+      `<img src="${esc(badgeOf(p).badgeColor || "")}" style="width:12px;height:12px;vertical-align:-2px" onerror="this.style.display='none'"> ` +
+      (pts != null ? `<b class="${pts >= 5 ? "up" : pts < 0 ? "down" : ""}">${pts} pts en la J${week}</b>` : `<span style="color:var(--text-3)">${finished ? "no jugó" : "aún sin puntuar"}</span>`) +
+      (extra || "") });
+  };
+
+  // los míos (plantilla), con titulares marcados
+  const mine = state.squad[c]
+    .map(e => e.custom ? null : state.byId[c].get(String(e.pid)))
+    .filter(p => p && inMatch(p))
+    .sort((a, b) => (wpOf(b) ?? -99) - (wpOf(a) ?? -99));
+  const myTotal = mine.reduce((a, p) => a + (lineupIds.size && !lineupIds.has(String(p.id)) ? 0 : (wpOf(p) || 0)), 0);
+
+  // vigilados y favoritos (sin duplicar los míos)
+  const mineIds = new Set(mine.map(p => String(p.id)));
+  const watched = [...new Set([...state.watch[c].map(w => String(w.pid)), ...(state.favs[c] || [])])]
+    .filter(pid => !mineIds.has(pid))
+    .map(pid => state.byId[c].get(pid))
+    .filter(p => p && inMatch(p));
+
+  // destacados del partido
+  const tops = (state.players[c] || [])
+    .filter(p => inMatch(p) && (wpOf(p) || 0) > 0)
+    .sort((a, b) => wpOf(b) - wpOf(a))
+    .slice(0, 6);
+
+  openModal(`
+    ${modalHead(esc(l.shortName || l.name) + " - " + esc(v.shortName || v.name))}
+    <div class="modal-body">
+      <div class="card" style="padding:14px;margin-bottom:14px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;text-align:center">
+        <div><img src="${esc(l.badgeColor || "")}" style="width:44px;height:44px;object-fit:contain" onerror="this.style.display='none'"><div style="font-size:11.5px;font-weight:700;margin-top:4px">${esc(l.name)}</div></div>
+        <div>
+          ${finished ? `<div style="font-family:'Sora',sans-serif;font-size:26px;font-weight:800">${m.localScore} - ${m.visitorScore}</div>`
+            : live ? `<span class="badge red">● EN JUEGO</span>`
+            : m ? `<div style="font-size:12px;color:var(--text-3)">${fmtDateLong(m.matchDate)}</div>` : `<div style="font-size:12px;color:var(--text-3)">J${week}</div>`}
+        </div>
+        <div><img src="${esc(v.badgeColor || "")}" style="width:44px;height:44px;object-fit:contain" onerror="this.style.display='none'"><div style="font-size:11.5px;font-weight:700;margin-top:4px">${esc(v.name)}</div></div>
+      </div>
+
+      <div class="section-title">Mis jugadores en el partido ${mine.length ? `· <span style="color:var(--acc)">${myTotal} pts ${lineupIds.size ? "de mi once" : ""}</span>` : ""}</div>
+      ${mine.length ? `<div class="card">${mine.map(p => row(p, lineupIds.has(String(p.id)) ? ` · <span class="badge acc" style="padding:1px 6px;font-size:9px">TITULAR</span>` : (lineupIds.size ? ` · <span style="color:var(--text-3)">banquillo</span>` : ""))).join("")}</div>`
+        : `<div class="card" style="padding:14px;font-size:12.5px;color:var(--text-3)">No tienes jugadores en este partido.</div>`}
+
+      ${watched.length ? `<div class="section-title">Vigilados y favoritos aquí</div><div class="card">${watched.map(p => row(p)).join("")}</div>` : ""}
+      ${tops.length ? `<div class="section-title">Los destacados del partido</div><div class="card">${tops.map(p => row(p)).join("")}</div>` : ""}
+      ${live || (isCur && !finished) ? `<div style="font-size:10.5px;color:var(--text-3);margin-top:10px">Los puntos entran solos con cada refresco de datos (~15 min): puedes dejar esta ficha abierta.</div>` : ""}
+    </div>`);
 }
 
 /* fila de jugador reutilizable */
@@ -1968,7 +2037,7 @@ function viewCalendario(){
     <span style="font-size:11.5px;color:var(--text-3)">${played}/${ms.length} jugados</span>
   </div>
   ${[...groups.entries()].map(([day, list]) =>
-    `<div class="day-lbl">${day}</div><div class="card">${list.map(matchRow).join("")}</div>`).join("")}`;
+    `<div class="day-lbl">${day}</div><div class="card">${list.map(m => matchRow(m, w)).join("")}</div>`).join("")}`;
 }
 function openPlayer(pid){
   const c = comp();
@@ -5166,6 +5235,8 @@ async function autoCheck(){
       // con sesión iniciada, repesca también la liga (mercado, dinero, actividad;
       // y si hay operaciones nuevas, las plantillas se invalidan solas)
       if (state.auth && state.myLeague[comp()]) loadLiga(true);
+      // si hay una ficha de partido abierta, se refresca con los puntos nuevos
+      if (window._matchOpen) openMatch(window._matchOpen.localId, window._matchOpen.visitorId, window._matchOpen.week);
       toast("Datos actualizados automáticamente", "ok");
     }
   } catch(e) { /* sin red: lo intentamos más tarde */ }
