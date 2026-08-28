@@ -1,0 +1,24 @@
+name: Resumen diario Telegram
+
+on:
+  schedule:
+    # 8:45 España (verano). El workflow de datos corre cada 15 min, así que a
+    # esta hora ya están los valores nuevos del día.
+    - cron: "45 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  resumen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Enviar resumen
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/resumen_telegram.py

@@ -475,6 +475,38 @@
   .progress-mini { height: 4px; background: var(--track); border-radius: 99px; overflow: hidden; margin-top: 5px; }
   .progress-mini > div { height: 100%; background: var(--grad); border-radius: 99px; }
 
+  /* ------- filas ricas: mini-gráfica y tendencia ------- */
+  .row-spark { width: 58px; height: 24px; flex-shrink: 0; opacity: .95; }
+  @media (max-width: 380px) { .row-spark { display: none; } }
+  .trend-ico {
+    display: inline-flex; width: 17px; height: 17px; border-radius: 5px; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 800; vertical-align: -3px; flex-shrink: 0;
+  }
+  .trend-ico.up { color: var(--green); background: rgba(74,222,128,.14); }
+  .trend-ico.down { color: var(--red); background: rgba(248,113,113,.14); }
+  .trend-ico.flat { color: var(--text-3); background: var(--card-2); }
+  .delta-pill { display: inline-block; font-size: 10.5px; font-weight: 800; padding: 2px 7px; border-radius: 7px; font-variant-numeric: tabular-nums; }
+  .delta-pill.up { color: var(--green); background: rgba(74,222,128,.12); }
+  .delta-pill.down { color: var(--red); background: rgba(248,113,113,.12); }
+  .delta-pill.flat { color: var(--text-3); background: var(--card-2); }
+  .p-row { position: relative; }
+  .p-row .pos-bar { position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 0 3px 3px 0; opacity: .85; }
+  .pd-hero {
+    border-radius: 16px; padding: 16px; margin-bottom: 14px; border: 1px solid var(--acc-border);
+    background: linear-gradient(135deg, var(--acc-soft), transparent 65%), var(--card);
+  }
+
+  /* ------- Mi Liga: pestañas y rivales ------- */
+  .rival-card { padding: 0; overflow: hidden; margin-bottom: 10px; }
+  .rival-head { display: flex; align-items: center; gap: 11px; padding: 12px 14px; cursor: pointer; }
+  .rival-head:hover { background: var(--card-hover); }
+  .rival-pos { width: 26px; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; background: var(--card-2); color: var(--text-2); flex-shrink: 0; }
+  .rival-pos.me { background: var(--acc-soft); color: var(--acc); }
+  .rival-body { border-top: 1px solid var(--border); }
+  .budget-line { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 5px 14px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+  .budget-line b { font-variant-numeric: tabular-nums; }
+  .budget-line.total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 9px; padding-bottom: 10px; font-size: 13px; }
+
   /* ------- segmentos de gráfica ------- */
   .seg { display: inline-flex; background: var(--card-2); border: 1px solid var(--border); border-radius: 9px; padding: 2px; gap: 2px; }
   .seg button { padding: 5px 11px; border-radius: 7px; font-size: 11px; font-weight: 700; color: var(--text-3); }
@@ -596,6 +628,10 @@ const state = {
   auth: null,           // tokens de sesión (se carga tras definir load())
   myLeague: {},         // comp -> {leagueId, name, teamId}
   liga: { loading:false, data:{}, errors:[] },
+  ligaTab: "mercado",   // pestaña activa dentro de Mi Liga
+  actFull: {},          // comp -> {items:[...], done:bool, loading:bool} historial completo de actividad
+  rivalTeams: {},       // comp -> {teamId: teamData} caché de equipos rivales
+  rivalOpen: null,      // teamId del rival desplegado
 };
 
 // migración de vigilados v1 (array de ids) a objetivos v2 (objetos con precio objetivo)
@@ -1162,6 +1198,26 @@ function matchRow(m){
 }
 
 /* fila de jugador reutilizable */
+function trendIcon(delta){
+  if (delta > 0) return `<span class="trend-ico up" title="Subiendo">▲</span>`;
+  if (delta < 0) return `<span class="trend-ico down" title="Bajando">▼</span>`;
+  return `<span class="trend-ico flat" title="Estable">=</span>`;
+}
+
+function miniSpark(c, pid, days){
+  const h = (state.history[c] || {})[String(pid)];
+  if (!h || h.length < 3) return "";
+  const pts = h.slice(-(days || 30));
+  const vals = pts.map(e => e[1]);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = (max - min) || 1;
+  const W = 58, H = 24, P = 2;
+  const step = (W - P*2) / (pts.length - 1);
+  const coords = pts.map((e,i) => `${(P + i*step).toFixed(1)},${(H - P - ((e[1]-min)/range)*(H-P*2)).toFixed(1)}`).join(" ");
+  const col = vals[vals.length-1] >= vals[0] ? "var(--green)" : "var(--red)";
+  return `<svg class="row-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${coords}" fill="none" stroke="${col}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
 function playerRow(p, opts){
   opts = opts || {};
   const c = comp();
@@ -1173,9 +1229,10 @@ function playerRow(p, opts){
   let sub;
   if (opts.reason != null) sub = opts.reason;
   else if (opts.sub === "status" && stt) sub = `<span style="color:${stt.color}">${stt.label}</span>`;
-  else if (opts.sub === "d7") sub = `<span class="${cls(d.d7)}">${fmtMSign(d.d7)} · 7d</span>`;
-  else sub = `<span class="${cls(d.d1)}">${d.d1 ? fmtMSign(d.d1) : "="} · hoy</span>`;
+  else if (opts.sub === "d7") sub = `<span class="delta-pill ${cls(d.d7)}">${fmtMSign(d.d7)} · 7d</span>`;
+  else sub = `<span class="delta-pill ${cls(d.d1)}">${d.d1 ? fmtMSign(d.d1) : "="} hoy</span>`;
   return `<div class="p-row" onclick="openPlayer('${p.id}')">
+    <span class="pos-bar" style="background:${pos.color}"></span>
     <img class="p-photo" loading="lazy" src="${esc(p.image)}" alt="" onerror="this.style.visibility='hidden'">
     <div class="p-main">
       <div class="p-name">${esc(p.nickname)}
@@ -1186,11 +1243,12 @@ function playerRow(p, opts){
       <div class="p-meta">
         <span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
         ${t ? `<img src="${esc(t.badgeColor)}" alt="" loading="lazy"> ${esc(t.shortName || t.name)}` : ""}
+        · ${p.points ?? 0} pts
       </div>
     </div>
-    <div class="p-pts"><div class="n">${p.points ?? 0}</div><div class="l">pts</div></div>
+    ${opts.noSpark ? "" : miniSpark(c, p.id, 30)}
     <div class="p-right">
-      <div class="p-val">${fmtM(pVal(p))} €</div>
+      <div class="p-val">${trendIcon(d.d1)} ${fmtM(pVal(p))} €</div>
       <div class="p-sub">${sub}</div>
     </div>
   </div>`;
@@ -1287,12 +1345,73 @@ function setF(k, v){
 /* =====================================================================
    VISTA: CONSEJOS
    ===================================================================== */
+/* --- consejos personalizados: MI plantilla, MI dinero y MIS objetivos --- */
+function personalAdvice(c){
+  const tips = [];
+  const money = ligaMoney(state.liga.data[c]?.money);
+
+  // sobre mi plantilla
+  for (const e of state.squad[c]) {
+    if (e.custom) continue;
+    const p = state.byId[c].get(String(e.pid));
+    if (!p) continue;
+    const v = pVal(p), d = deltas(c, e.pid), s = streakOf(c, e.pid);
+    const pl = v - (e.buyPrice || 0);
+    const plPct = e.buyPrice ? pl / e.buyPrice * 100 : 0;
+    if (p.playerStatus === "injured" || p.playerStatus === "suspended") {
+      tips.push({ icon: "🚑", cls: "red", txt: `<b>${esc(p.nickname)}</b> está ${STATUS[p.playerStatus].label.toLowerCase()} y vale ${fmtM(v)} — si va para largo, véndelo antes de que baje más.`, pid: e.pid });
+    } else if (s <= -3) {
+      tips.push({ icon: "📉", cls: "red", txt: `<b>${esc(p.nickname)}</b> lleva ${Math.abs(s)} días seguidos cayendo (${fmtMSign(d.d7)} en 7d). Si no cuentas con él para puntos, es momento de soltarlo.`, pid: e.pid });
+    } else if (plPct >= 30 && s <= 0) {
+      tips.push({ icon: "💰", cls: "green", txt: `<b>${esc(p.nickname)}</b> te deja ${fmtMSign(pl)} (${plPct.toLocaleString("es-ES",{maximumFractionDigits:0})} %) y su subida se ha frenado: buen punto para hacer caja.`, pid: e.pid });
+    } else if (s >= 4) {
+      tips.push({ icon: "🔥", cls: "green", txt: `<b>${esc(p.nickname)}</b> lleva ${s} días subiendo sin parar (${fmtMSign(d.d7)} en 7d). Aguántalo, aún tiene cuerda.`, pid: e.pid });
+    }
+  }
+
+  // objetivos a punto de caramelo
+  for (const w of state.watch[c]) {
+    if (!w.target) continue;
+    const p = state.byId[c].get(String(w.pid));
+    if (!p) continue;
+    const v = pVal(p);
+    const dist = w.dir === "above" ? (w.target - v) / w.target : (v - w.target) / w.target;
+    if (dist > 0 && dist <= 0.04) {
+      tips.push({ icon: "🎯", cls: "acc", txt: `<b>${esc(p.nickname)}</b> está a un ${(dist*100).toLocaleString("es-ES",{maximumFractionDigits:1})} % de tu objetivo de ${fmtM(w.target)} €. Atento.`, pid: w.pid });
+    }
+  }
+
+  // qué me puedo permitir con mi dinero real
+  if (money != null) {
+    const afford = (state.players[c] || [])
+      .filter(p => p.playerStatus === "ok" && !squadEntry(p.id) && pVal(p) <= money && (p.points || 0) >= 10)
+      .sort((a, b) => ppm(b) - ppm(a))[0];
+    if (afford) {
+      tips.push({ icon: "🛒", cls: "acc", txt: `Con tus <b>${fmtM(money)} €</b> te llega para <b>${esc(afford.nickname)}</b> (${fmtM(pVal(afford))}, ${ppm(afford).toLocaleString("es-ES",{maximumFractionDigits:1})} pts por millón — de lo más rentable a tu alcance).`, pid: afford.id });
+    }
+  }
+  return tips;
+}
+
 function viewConsejos(){
   const c = comp();
   const players = state.players[c] || [];
   const pool = players.filter(p => p.playerStatus !== "out_of_league");
   const values = pool.map(pVal).filter(v => v > 0).sort((a,b)=>a-b);
   const medianVal = values.length ? values[Math.floor(values.length/2)] : 0;
+
+  // --- personalizados: mi plantilla, mi dinero, mis objetivos ---
+  const personal = personalAdvice(c);
+  const personalHtml = personal.length ? `
+    <div class="section-title">⭐ Para ti hoy</div>
+    ${personal.map(t => `<div class="card clickable" style="padding:12px 14px;margin-bottom:8px;display:flex;gap:11px;align-items:flex-start" onclick="openPlayer('${t.pid}')">
+      <div style="font-size:19px">${t.icon}</div>
+      <div style="font-size:12.5px;line-height:1.55;color:var(--text-2)">${t.txt}</div>
+    </div>`).join("")}` :
+    `<div class="section-title">⭐ Para ti hoy</div>
+     <div class="card" style="padding:13px 15px;margin-bottom:8px;font-size:12.5px;color:var(--text-3)">
+       Sin avisos sobre tu plantilla hoy. ${state.squad[c].length ? "Todo estable." : "Añade jugadores en Mi Plantilla (o conéctate en Mi Liga) para recibir consejos personalizados."}
+     </div>`;
 
   // --- para fichar: momentum de mercado ---
   const buys = pool
@@ -1358,6 +1477,7 @@ function viewConsejos(){
     Señales calculadas con los datos oficiales (precio, racha, forma, rival). Son pistas para que sepas
     sobre quién informarte, no verdades absolutas: la última palabra es tuya.
   </div>
+  ${personalHtml}
   ${sellAlerts.length ? section("⚠️ Mi plantilla: vigilar o vender", sellAlerts.map(x => playerRow(x.p, { reason: x.reason })), "") : ""}
   ${section("📈 Para fichar: en plena subida", buys.map(x => playerRow(x.p, { reason: reasonBuy(x) })), "Nadie con subida clara ahora mismo")}
   ${section("💎 Chollos: puntos por millón", cheap.map(x => playerRow(x.p, { reason: reasonCheap(x) })), "Sin chollos claros con estos datos")}
@@ -1636,19 +1756,24 @@ function openPlayer(pid){
   openModal(`
     ${modalHead(esc(p.nickname))}
     <div class="modal-body">
-      <div class="pd-head">
-        <img class="pd-photo" src="${esc(p.image)}" alt="" onerror="this.style.visibility='hidden'">
-        <div style="flex:1;min-width:0">
-          <div class="pd-name">${esc(p.nickname)}</div>
-          <div class="pd-team">
-            <span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
-            ${t ? `<img src="${esc(t.badgeColor)}" alt=""> ${esc(t.name)}` : ""}
+      <div class="pd-hero">
+        <div class="pd-head" style="margin-bottom:10px">
+          <img class="pd-photo" src="${esc(p.image)}" alt="" onerror="this.style.visibility='hidden'">
+          <div style="flex:1;min-width:0">
+            <div class="pd-name">${esc(p.nickname)}</div>
+            <div class="pd-team">
+              <span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
+              ${t ? `<img src="${esc(t.badgeColor)}" alt=""> ${esc(t.name)}` : ""}
+            </div>
+            ${stt && p.playerStatus !== "ok" ? `<div style="margin-top:6px"><span class="badge" style="color:${stt.color};border-color:${stt.color}">${stt.label}</span></div>` : ""}
           </div>
-          ${stt && p.playerStatus !== "ok" ? `<div style="margin-top:6px"><span class="badge" style="color:${stt.color};border-color:${stt.color}">${stt.label}</span></div>` : ""}
         </div>
+        <div class="pd-value-row">
+          <div class="pd-value">${fmt(val)}</div>
+          <span style="font-size:18px;vertical-align:4px">${trendIcon(d.d1)}</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div>
       </div>
-      <div class="pd-value-row"><div class="pd-value">${fmt(val)}</div></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div>
       <div class="mini-stats">
         ${miniStat(p.points ?? 0, "Puntos")}
         ${miniStat((p.averagePoints ?? 0).toLocaleString("es-ES",{maximumFractionDigits:1}), "Media")}
@@ -2003,8 +2128,8 @@ function squadRow(e){
       </div>
     </div>
     <div class="p-right">
-      <div class="p-val">${current != null ? fmtM(current) + " €" : "—"}</div>
-      <div class="p-sub ${pl != null ? cls(pl) : ""}">${pl != null ? fmtMSign(pl) : "manual"}</div>
+      <div class="p-val">${p ? trendIcon(deltas(c, e.pid).d1) + " " : ""}${current != null ? fmtM(current) + " €" : "—"}</div>
+      <div class="p-sub"><span class="delta-pill ${pl != null ? cls(pl) : "flat"}">${pl != null ? fmtMSign(pl) : "manual"}</span></div>
     </div>
     <button class="icon-btn" style="width:30px;height:30px" onclick="event.stopPropagation();openEditEntry('${e.id}')" title="Editar">${IC.edit.replace('class="ic"','class="ic" style="width:13px;height:13px"')}</button>
   </div>`;
@@ -2087,6 +2212,7 @@ function viewMovs(){
     <button class="chip ${f==="all"?"active":""}" onclick="state.moveFilter='all';render()">Todos</button>
     <button class="chip ${f==="buy"?"active":""}" onclick="state.moveFilter='buy';render()">Compras</button>
     <button class="chip ${f==="sell"?"active":""}" onclick="state.moveFilter='sell';render()">Ventas</button>
+    ${state.auth ? `<button class="chip" onclick="syncRealMoves()" style="margin-left:auto;color:var(--acc);border-color:var(--acc-border)">⟳ Sincronizar con mi liga</button>` : ""}
   </div>
   ${listHtml}`;
 }
@@ -2097,7 +2223,7 @@ function moveRow(m){
   return `<div class="mv-row">
     <div class="mv-icon ${isBuy?"buy":"sell"}">${isBuy ? IC.down : IC.upar}</div>
     <div class="p-main">
-      <div class="p-name">${esc(m.name)}</div>
+      <div class="p-name">${esc(m.name)}${m.real ? ` <span class="badge acc" style="padding:1px 6px;font-size:9px">LIGA</span>` : ""}</div>
       <div class="p-meta">${isBuy ? "Compra" : "Venta"}${pos ? " · " + pos.tag : ""}${m.date ? " · " + fmtDate(m.date) : ""}</div>
     </div>
     <div class="p-right">
@@ -2351,6 +2477,277 @@ function ligaMoney(m){
   return m.teamMoney ?? m.money ?? m.balance ?? null;
 }
 
+/* =====================================================================
+   MI LIGA · historial completo de actividad, presupuestos y operaciones
+   ===================================================================== */
+const INITIAL_BUDGET = 100000000;
+
+async function loadFullActivity(c, force){
+  const sel = state.myLeague[c];
+  if (!sel) return;
+  const st = state.actFull[c] || (state.actFull[c] = { items: [], done: false, loading: false });
+  if (st.loading || (st.done && !force)) return;
+  st.loading = true;
+  if (force) { st.items = []; st.done = false; }
+  try {
+    for (let page = 0; page < 40; page++) {
+      const raw = await authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/activity/${page}?x-lang=es`);
+      const items = unwrapList(raw) || [];
+      if (!items.length) break;
+      st.items.push(...items);
+      if (items.length < 5) break; // última página
+    }
+    st.done = true;
+  } catch(e) {
+    state.liga.errors.push({ key: "actividad completa", msg: e.message, extra: "" });
+  }
+  st.loading = false;
+  if (state.view === "liga") render();
+}
+
+/* normaliza un item de actividad a {kind, teamId, manager, pid, name, money, date} */
+function parseAct(a){
+  const pm = a.playerMaster || a.player || null;
+  const team = a.team || a.buyerTeam || null;
+  const kind0 = String(a.title || a.type || a.operation || "").toLowerCase();
+  let kind = "otro";
+  if (/venta|vendido|sold|sale/.test(kind0)) kind = "sell";
+  else if (/compra|fichaje|comprado|buy|bought|puja/.test(kind0)) kind = "buy";
+  else if (/cl[aá]usula|buyout/.test(kind0)) kind = "clause";
+  return {
+    id: String(a.id ?? a.activityId ?? (kind0 + (a.date || "") + (pm?.id || ""))),
+    kind,
+    kindRaw: a.title || a.type || a.operation || "",
+    teamId: team?.id != null ? String(team.id) : null,
+    manager: team?.manager?.managerName || team?.manager?.name || a.managerName || "",
+    pid: pm?.id != null ? String(pm.id) : null,
+    name: pm?.nickname || pm?.name || "",
+    money: a.money ?? a.amount ?? a.price ?? null,
+    date: a.date || a.createdAt || null,
+  };
+}
+
+/* presupuestos estimados de todos los equipos a partir del historial completo.
+   Base: 100M + ventas − compras. Los ingresos que no vemos (premios por puntos,
+   jornadas…) se calibran con MI dinero real y se reparten por puntos. */
+function computeBudgets(c){
+  const d = state.liga.data[c];
+  const act = state.actFull[c];
+  const standing = d?.standing || [];
+  if (!act?.done || !standing.length) return null;
+
+  const by = {}; // teamId -> {buys, sells, nBuys, nSells}
+  for (const raw of act.items) {
+    const a = parseAct(raw);
+    if (!a.teamId || a.money == null) continue;
+    const t = by[a.teamId] || (by[a.teamId] = { buys: 0, sells: 0, nBuys: 0, nSells: 0 });
+    if (a.kind === "buy" || a.kind === "clause") { t.buys += +a.money; t.nBuys++; }
+    else if (a.kind === "sell") { t.sells += +a.money; t.nSells++; }
+  }
+
+  const myId = state.myLeague[c]?.teamId;
+  const myMoney = ligaMoney(d?.money);
+  const rows = standing.map((r, i) => {
+    const team = r.team || r;
+    const tid = String(team.id ?? "");
+    const ops = by[tid] || { buys: 0, sells: 0, nBuys: 0, nSells: 0 };
+    return {
+      tid, pos: r.position ?? i + 1,
+      name: team.name || team.manager?.managerName || "Equipo",
+      manager: team.manager?.managerName || team.manager?.name || "",
+      points: +(r.points ?? r.teamPoints ?? 0),
+      teamValue: team.teamValue != null ? +team.teamValue : null,
+      ...ops,
+      base: INITIAL_BUDGET - ops.buys + ops.sells,
+      isMe: myId && tid === String(myId),
+    };
+  });
+
+  // calibración con mi cuenta: lo que mi dinero real se desvía de la fórmula
+  // son ingresos invisibles (premios); se estima proporcional a los puntos
+  let rate = 0, calibrated = false, incomplete = false;
+  const me = rows.find(r => r.isMe);
+  if (me && myMoney != null) {
+    const invisible = myMoney - me.base;
+    // si sale negativo, el historial visible no cubre todas mis compras:
+    // los premios nunca restan. Marcamos aproximado y no propagamos el error.
+    if (invisible < -1000000) incomplete = true;
+    if (me.points > 0 && invisible > 0) { rate = invisible / me.points; calibrated = true; }
+  }
+  for (const r of rows) {
+    r.extra = Math.round(rate * r.points);
+    r.budget = r.isMe && myMoney != null ? myMoney : r.base + r.extra;
+  }
+  return { rows, calibrated, rate, incomplete };
+}
+
+/* valor histórico de un jugador en una fecha (para profit de plantillas iniciales) */
+function histValueAt(c, pid, dateInt){
+  const h = (state.history[c] || {})[String(pid)];
+  if (!h || !h.length) return null;
+  let best = h[0];
+  for (const e of h) { if (e[0] <= dateInt) best = e; else break; }
+  return best[1];
+}
+
+/* mapa de precios de compra reales por equipo+jugador según la actividad */
+function purchaseMap(c){
+  const act = state.actFull[c];
+  const map = {};
+  if (!act?.done) return map;
+  for (const raw of act.items) {
+    const a = parseAct(raw);
+    if ((a.kind === "buy" || a.kind === "clause") && a.teamId && a.pid && a.money != null) {
+      map[a.teamId + ":" + a.pid] = +a.money; // la actividad viene de nueva a vieja: nos quedamos la compra más reciente
+    }
+  }
+  return map;
+}
+
+async function toggleRival(tid){
+  const c = comp();
+  state.rivalOpen = state.rivalOpen === tid ? null : tid;
+  const cache = state.rivalTeams[c] || (state.rivalTeams[c] = {});
+  if (state.rivalOpen && !cache[tid]) {
+    render();
+    try {
+      cache[tid] = await authFetch(`/api/v1/competition/${c}/leagues/${state.myLeague[c].leagueId}/teams/${tid}?x-lang=es`);
+    } catch(e) {
+      cache[tid] = { error: e.message };
+    }
+  }
+  render();
+}
+
+/* ---------- operaciones reales: pujar, vender, retirar ---------- */
+async function ligaAction(desc, fn){
+  try {
+    await fn();
+    toast(desc + " ✔", "ok");
+    vibrate(16);
+    closeModal();
+    loadLiga(true);
+  } catch(e) {
+    const extra = (typeof e.data === "object" && e.data) ? (e.data.message || e.data.code || "") : "";
+    toast(`No se pudo: ${e.message}${extra ? " · " + extra : ""}`, "err");
+  }
+}
+
+function openBidModal(marketId, pidStr, price, myBid){
+  const c = comp();
+  const p = state.byId[c].get(String(pidStr));
+  const name = p?.nickname || "el jugador";
+  const money = ligaMoney(state.liga.data[c]?.money);
+  openModal(`
+    ${modalHead((myBid ? "Modificar puja · " : "Pujar por ") + esc(name))}
+    <div class="modal-body">
+      <div class="card" style="padding:11px 14px;margin-bottom:14px;font-size:13px">
+        Precio de salida: <b>${fmt(+price)}</b>
+        ${myBid ? `<br>Tu puja actual: <b>${fmt(+myBid.money)}</b>` : ""}
+        ${money != null ? `<br>Tu dinero: <b>${fmt(money)}</b>` : ""}
+      </div>
+      ${moneyInput("bidAmount", "Tu puja", myBid ? +myBid.money : +price, "La puja más alta se lleva al jugador cuando expire el mercado")}
+      <button class="btn-acc" style="width:100%" id="bidGo">${myBid ? "Guardar puja" : "Confirmar puja"}</button>
+      ${myBid?.id ? `<button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" id="bidCancel">Retirar mi puja</button>` : ""}
+    </div>`, ov => {
+      bindMoney(ov.querySelector("#bidAmount"));
+      ov.querySelector("#bidGo").addEventListener("click", () => {
+        const amount = moneyVal(ov.querySelector("#bidAmount"));
+        if (!amount || amount < +price) { toast("La puja debe ser al menos el precio de salida", "err"); return; }
+        if (money != null && amount > money) { toast("No te llega el dinero para esa puja", "err"); return; }
+        if (!confirm(`¿Confirmar puja de ${fmt(amount)} por ${name}? Se enviará a tu liga REAL.`)) return;
+        const L = state.myLeague[c].leagueId;
+        ligaAction("Puja enviada", () => myBid?.id
+          ? authFetch(`/api/v1/competition/${c}/league/${L}/market/${marketId}/bid/${myBid.id}?x-lang=es`, { method:"PUT", body:{ money: amount } })
+          : authFetch(`/api/v1/competition/${c}/league/${L}/market/${marketId}/bid?x-lang=es`, { method:"POST", body:{ money: amount } }));
+      });
+      const del = ov.querySelector("#bidCancel");
+      if (del) del.addEventListener("click", () => {
+        if (!confirm("¿Retirar tu puja por " + name + "?")) return;
+        const L = state.myLeague[c].leagueId;
+        ligaAction("Puja retirada", () =>
+          authFetch(`/api/v1/competition/${c}/league/${L}/market/${marketId}/bid/${myBid.id}/cancel?x-lang=es`, { method:"DELETE" }));
+      });
+    });
+}
+
+function openSellRealModal(pidStr){
+  const c = comp();
+  const p = state.byId[c].get(String(pidStr));
+  const val = p ? pVal(p) : 0;
+  const name = p?.nickname || "el jugador";
+  openModal(`
+    ${modalHead("Poner en venta a " + esc(name))}
+    <div class="modal-body">
+      <div class="card" style="padding:11px 14px;margin-bottom:14px;font-size:13px">
+        Valor de mercado: <b>${fmt(val)}</b><br>
+        <span style="color:var(--text-3);font-size:12px">Saldrá al mercado de tu liga REAL. Los rivales podrán pujar o te llegarán ofertas.</span>
+      </div>
+      ${moneyInput("sellRealPrice", "Precio de venta", val)}
+      <button class="btn-acc" style="width:100%" id="sellRealGo">Poner en venta</button>
+    </div>`, ov => {
+      bindMoney(ov.querySelector("#sellRealPrice"));
+      ov.querySelector("#sellRealGo").addEventListener("click", () => {
+        const price = moneyVal(ov.querySelector("#sellRealPrice"));
+        if (!price) { toast("Pon el precio", "err"); return; }
+        if (!confirm(`¿Poner a ${name} en venta por ${fmt(price)} en tu liga REAL?`)) return;
+        const L = state.myLeague[c].leagueId;
+        ligaAction("Puesto en venta", () =>
+          authFetch(`/api/v1/competition/${c}/league/${L}/market/sell?x-lang=es`, { method:"POST", body:{ playerId: pidStr, salePrice: price } }));
+      });
+    });
+}
+
+function withdrawFromMarket(marketId, name){
+  const c = comp();
+  if (!confirm("¿Retirar a " + name + " del mercado de tu liga?")) return;
+  const L = state.myLeague[c].leagueId;
+  ligaAction("Retirado del mercado", () =>
+    authFetch(`/api/v1/competition/${c}/league/${L}/market/${marketId}/delete?x-lang=es`, { method:"DELETE" }));
+}
+
+/* ---------- sincronizar movimientos reales de mi liga ---------- */
+async function syncRealMoves(){
+  const c = comp();
+  if (!state.auth || !state.myLeague[c]) { toast("Conéctate en Mi Liga primero", "err"); return; }
+  toast("Leyendo el historial de tu liga…");
+  await loadFullActivity(c);
+  const act = state.actFull[c];
+  if (!act?.done) { toast("No se pudo leer la actividad", "err"); return; }
+  const myId = String(state.myLeague[c].teamId || "");
+  const existing = new Set(state.moves[c].map(m => m.actId).filter(Boolean));
+  const news = [];
+  for (const raw of act.items) {
+    const a = parseAct(raw);
+    if (!a.teamId || a.teamId !== myId || a.money == null || !a.name) continue;
+    if (a.kind !== "buy" && a.kind !== "sell" && a.kind !== "clause") continue;
+    if (existing.has(a.id)) continue;
+    news.push(a);
+  }
+  if (!news.length) { toast("Movimientos ya al día con tu liga", "ok"); return; }
+  const buys = news.filter(a => a.kind !== "sell").length;
+  const sells = news.length - buys;
+  if (!confirm(`Se importarán ${news.length} movimientos reales de tu liga (${buys} compras, ${sells} ventas). Las ventas calculan su beneficio contra tu precio de compra en Mi Plantilla si lo tienes. ¿Continuar?`)) return;
+  for (const a of news.reverse()) { // de viejo a nuevo
+    const date = a.date ? String(a.date).slice(0, 10) : todayISO();
+    if (a.kind === "sell") {
+      const entry = state.squad[c].find(e => String(e.pid) === a.pid);
+      const buyPrice = entry ? entry.buyPrice : null;
+      state.moves[c].push({ id: uid(), actId: a.id, real: true, type: "sell", pid: a.pid, name: a.name, price: +a.money, date, buyPrice, profit: buyPrice != null ? +a.money - buyPrice : null });
+      if (entry) state.squad[c] = state.squad[c].filter(e => e.id !== entry.id);
+    } else {
+      const local = state.byId[c].get(a.pid);
+      state.moves[c].push({ id: uid(), actId: a.id, real: true, type: "buy", pid: a.pid, name: a.name, pos: local ? String(local.positionId) : null, price: +a.money, date });
+      if (a.pid && local && !squadEntry(a.pid)) {
+        state.squad[c].push({ id: uid(), pid: a.pid, name: a.name, pos: String(local.positionId), teamId: String(local.teamId), buyPrice: +a.money, buyDate: date, custom: false, imported: true });
+      }
+    }
+  }
+  persist();
+  render();
+  toast(news.length + " movimientos reales importados", "ok");
+}
+
 function ligaPlayerRow(pm, right){
   // fila de jugador de la liga: usa nuestra ficha si el jugador está en la BD local
   const c = comp();
@@ -2449,7 +2846,7 @@ function viewLiga(){
     ${IC.user.replace('class="ic"','class="ic" style="width:20px;height:20px;color:var(--acc)"')}
     <div style="flex:1;min-width:130px">
       <div style="font-size:14px;font-weight:700">${esc(myName)}</div>
-      <div style="font-size:11.5px;color:var(--text-3)">${sel ? esc(sel.name) : "Sin liga en esta competición"}</div>
+      <div style="font-size:11.5px;color:var(--text-3)">${sel ? esc(sel.name) : "Sin liga en esta competición"}${money != null ? ` · <b style="color:var(--acc)">${fmtM(money)} €</b>` : ""}</div>
     </div>
     <button class="icon-btn" onclick="loadLiga(true)" title="Recargar">${state.liga.loading ? IC.refresh.replace('class="ic"','class="ic spinning"') : IC.refresh}</button>
     <button class="btn-ghost" style="padding:8px 12px;font-size:12px" onclick="fantasyLogout()">Salir</button>
@@ -2464,85 +2861,200 @@ function viewLiga(){
       ${diagHtml()}`;
   }
 
-  // dinero + resumen
-  const moneyHtml = `<div class="stat-grid" style="margin-bottom:4px">
-    ${statTile("Dinero disponible", money != null ? fmtM(money) + " €" : "—", "")}
-    ${statTile("Mercado de hoy", (d.market || []).length + " jugadores", "")}
-  </div>`;
+  const TABS = [["mercado","Mercado del día"],["equipo","Mi equipo"],["rivales","Rivales"],["actividad","Actividad"]];
+  const tabsHtml = `<div class="chips-row no-scrollbar" style="margin-bottom:12px">${TABS.map(([id,l]) =>
+    `<button class="chip ${state.ligaTab === id ? "active" : ""}" onclick="state.ligaTab='${id}';render()">${l}</button>`).join("")}</div>`;
 
-  // mercado diario
-  const marketHtml = (d.market || []).length ? `
-    <div class="section-title">Mercado de hoy en mi liga</div>
-    <div class="card">${d.market.map(it => {
-      const pm = it.playerMaster || it.player || it;
-      const price = it.salePrice ?? it.price ?? pm.marketValue ?? 0;
-      const bids = it.numberOfBids ?? it.bids ?? null;
-      const seller = it.sellerTeam?.manager?.managerName || it.sellerTeam?.name || null;
-      const exp = it.expirationDate || it.expiration || null;
-      return ligaPlayerRow(pm, `<div class="p-right">
-        <div class="p-val">${fmtM(+price)} €</div>
-        <div class="p-sub">${bids != null ? bids + (bids === 1 ? " puja" : " pujas") : ""}${seller ? " · " + esc(seller) : (exp ? " · hasta " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : "")}</div>
-      </div>`);
-    }).join("")}</div>` : "";
+  let body = "";
+  if (state.ligaTab === "mercado") body = ligaTabMercado(c, d);
+  else if (state.ligaTab === "equipo") body = ligaTabEquipo(c, d);
+  else if (state.ligaTab === "rivales") body = ligaTabRivales(c, d);
+  else body = ligaTabActividad(c, d);
 
-  // mi equipo real
-  const teamPlayers = d.team ? (d.team.players || d.team.playerTeams || []) : [];
-  const teamHtml = teamPlayers.length ? `
-    <div class="section-title">Mi equipo real (${teamPlayers.length})
-      <button style="margin-left:auto;color:var(--acc);font-size:11.5px;font-weight:700" onclick="importLigaSquad()">Importar a Mi Plantilla ›</button>
-    </div>
-    <div class="card">${teamPlayers.map(x => {
-      const pm = x.playerMaster || x.player || x;
-      const clause = x.buyoutClause ?? null;
-      const val = pm.marketValue ?? null;
-      return ligaPlayerRow(pm, `<div class="p-right">
-        <div class="p-val">${val != null ? fmtM(+val) + " €" : ""}</div>
-        <div class="p-sub">${clause != null ? "cláusula " + fmtM(+clause) : ""}</div>
-      </div>`);
-    }).join("")}</div>` : "";
-
-  // clasificación de mi liga
-  const standHtml = (d.standing || []).length ? `
-    <div class="section-title">Clasificación de mi liga</div>
-    <div class="card table-scroll"><table class="standings" style="min-width:340px">
-      <tr><th style="width:30px">#</th><th class="name-col">Equipo</th><th>Puntos</th><th>Valor</th></tr>
-      ${d.standing.map((r, i) => {
-        const team = r.team || r;
-        const isMe = sel && sel.teamId && String(team.id) === String(sel.teamId);
-        const mgr = team.manager?.managerName || team.manager?.name || "";
-        return `<tr ${isMe ? 'style="background:var(--acc-soft)"' : ""}>
-          <td><span class="pos-n">${r.position ?? i + 1}</span></td>
-          <td class="name-col">${esc(team.name || mgr || "Equipo")}${mgr && team.name ? `<div style="font-size:10.5px;color:var(--text-3);font-weight:500">${esc(mgr)}</div>` : ""}</td>
-          <td class="pts">${r.points ?? r.teamPoints ?? "—"}</td>
-          <td>${team.teamValue != null ? fmtM(+team.teamValue) : "—"}</td>
-        </tr>`;
-      }).join("")}
-    </table></div>` : "";
-
-  // actividad reciente de la liga
-  const actList = unwrapList(d.activity) || [];
-  const actHtml = actList.length ? `
-    <div class="section-title">Actividad reciente</div>
-    <div class="card">${actList.slice(0, 15).map(a => {
-      const pm = a.playerMaster || a.player || null;
-      const who = a.team?.manager?.managerName || a.team?.name || a.managerName || "";
-      const kind = a.title || a.type || a.operation || "";
-      const amount = a.money ?? a.amount ?? a.price ?? null;
-      const when = a.date || a.createdAt || null;
-      return `<div class="mv-row">
-        <div class="mv-icon ${/venta|sale|sell/i.test(kind) ? "sell" : "buy"}">${/venta|sale|sell/i.test(kind) ? IC.upar : IC.down}</div>
-        <div class="p-main">
-          <div class="p-name">${esc(pm?.nickname || pm?.name || kind || "Operación")}</div>
-          <div class="p-meta">${esc(String(kind))}${who ? " · " + esc(who) : ""}${when ? " · " + fmtDate(when) : ""}</div>
-        </div>
-        ${amount != null ? `<div class="p-right"><div class="p-val">${fmtM(+amount)} €</div></div>` : ""}
-      </div>`;
-    }).join("")}</div>` : "";
-
-  return headHtml + moneyHtml + marketHtml + teamHtml + standHtml + actHtml + diagHtml() +
+  return headHtml + tabsHtml + body + diagHtml() +
     `<div style="font-size:11px;color:var(--text-3);margin-top:14px;line-height:1.5">
-      Solo lectura de momento: pujar y vender desde aquí llegará cuando confirmemos que todo lo que ves cuadra con la app oficial.
+      Las pujas y ventas van a tu liga REAL, siempre con confirmación previa.
     </div>`;
+}
+
+/* rivales que podrían pujar un precio dado: dinero estimado + deuda permitida
+   (en el juego puedes endeudarte hasta el 20% del valor de tu plantilla) */
+function possibleBidders(c, price, excludeTid){
+  const B = computeBudgets(c);
+  if (!B) return null;
+  return B.rows
+    .filter(r => !r.isMe && String(r.tid) !== String(excludeTid || ""))
+    .map(r => ({ ...r, maxBid: r.budget + (r.teamValue ? Math.round(r.teamValue * 0.2) : 0) }))
+    .filter(r => r.maxBid >= price)
+    .sort((a, b) => b.maxBid - a.maxBid);
+}
+
+/* --- pestaña: mercado del día de mi liga --- */
+function ligaTabMercado(c, d){
+  const market = d.market || [];
+  if (!market.length) return `<div class="card"><div class="empty-state"><div class="big">🛒</div>Mercado vacío ahora mismo</div></div>`;
+  const act = state.actFull[c];
+  if (!act || (!act.done && !act.loading)) setTimeout(() => loadFullActivity(c), 30);
+  const biddersReady = !!(act && act.done);
+  return `${!biddersReady ? `<div style="font-size:11px;color:var(--text-3);margin-bottom:8px">Analizando el historial para estimar posibles pujadores…</div>` : ""}
+  <div class="card">${market.map((it, idx) => {
+    const pm = it.playerMaster || it.player || it;
+    const pid = String(pm.id ?? "");
+    const price = it.salePrice ?? it.price ?? pm.marketValue ?? 0;
+    const bids = it.numberOfBids ?? it.bids ?? null;
+    const sellerName = it.sellerTeam?.manager?.managerName || it.sellerTeam?.name || null;
+    const mine = state.myLeague[c]?.teamId && it.sellerTeam?.id != null && String(it.sellerTeam.id) === String(state.myLeague[c].teamId);
+    const exp = it.expirationDate || it.expiration || null;
+    const btn = mine
+      ? `<button class="btn-ghost btn-danger" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();withdrawFromMarket('${esc(String(it.id))}','${esc(pm.nickname || "jugador")}')">Retirar</button>`
+      : `<button class="btn-acc" style="padding:7px 13px;font-size:12px" onclick="event.stopPropagation();bidFromMarket(${idx})">Pujar</button>`;
+    // posibles pujadores: rivales a los que les llega el dinero para este precio
+    let biddersHtml = "";
+    if (biddersReady && bids != null && bids > 0) {
+      const cands = possibleBidders(c, +price, it.sellerTeam?.id);
+      if (cands) biddersHtml = `<div style="padding:0 12px 10px 62px;font-size:11px;color:var(--text-3);line-height:1.6">
+        ${cands.length
+          ? `🎯 Posibles pujadores: ` + cands.slice(0, 4).map(r => `<span class="badge" style="font-size:10px;padding:2px 7px">${esc(r.manager || r.name)} · hasta ${fmtM(r.maxBid)}</span>`).join(" ") + (cands.length > 4 ? ` +${cands.length - 4}` : "")
+          : `🎯 A ningún rival le llega el dinero para este precio`}
+      </div>`;
+    }
+    return ligaPlayerRow(pm, `<div class="p-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
+      <div><span class="p-val">${fmtM(+price)} €</span>
+        <div class="p-sub">${bids != null ? bids + (bids === 1 ? " puja" : " pujas") : ""}${sellerName ? " · " + esc(sellerName) : ""}${exp ? " · hasta " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}</div></div>
+      ${btn}
+    </div>`) + biddersHtml;
+  }).join("")}</div>`;
+}
+
+/* abre el modal de puja leyendo el item del mercado por índice (evita
+   serializar objetos en el onclick) */
+function bidFromMarket(idx){
+  const c = comp();
+  const it = (state.liga.data[c]?.market || [])[idx];
+  if (!it) return;
+  const pm = it.playerMaster || it.player || it;
+  const myBid = it.bid || it.myBid || null;
+  openBidModal(String(it.id), String(pm.id ?? ""), +(it.salePrice ?? it.price ?? pm.marketValue ?? 0),
+    myBid ? { id: String(myBid.id ?? ""), money: +(myBid.money ?? 0) } : null);
+}
+
+/* --- pestaña: mi equipo real --- */
+function ligaTabEquipo(c, d){
+  const teamPlayers = d.team ? (d.team.players || d.team.playerTeams || []) : [];
+  if (!teamPlayers.length) return `<div class="card"><div class="empty-state"><div class="big">⚽</div>No se pudo leer tu equipo</div></div>`;
+  const market = d.market || [];
+  const onSale = new Set(market.filter(it => it.sellerTeam?.id != null && String(it.sellerTeam.id) === String(state.myLeague[c]?.teamId || "")).map(it => String((it.playerMaster || it.player || it).id ?? "")));
+  return `
+  <div class="section-title">Mi equipo real (${teamPlayers.length})
+    <button style="margin-left:auto;color:var(--acc);font-size:11.5px;font-weight:700" onclick="importLigaSquad()">Importar a Mi Plantilla ›</button>
+  </div>
+  <div class="card">${teamPlayers.map(x => {
+    const pm = x.playerMaster || x.player || x;
+    const pid = String(pm.id ?? "");
+    const clause = x.buyoutClause ?? null;
+    const local = state.byId[c].get(pid);
+    const val = local ? pVal(local) : (pm.marketValue != null ? +pm.marketValue : null);
+    const dd = local ? deltas(c, pid) : null;
+    const selling = onSale.has(pid);
+    return ligaPlayerRow(pm, `<div class="p-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
+      <div><span class="p-val">${dd ? trendIcon(dd.d1) + " " : ""}${val != null ? fmtM(val) + " €" : "—"}</span>
+        <div class="p-sub">${clause != null ? "cláusula " + fmtM(+clause) : ""}</div></div>
+      ${selling
+        ? `<span class="badge orange">en venta</span>`
+        : `<button class="btn-ghost" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();openSellRealModal('${pid}')">Vender</button>`}
+    </div>`);
+  }).join("")}</div>`;
+}
+
+/* --- pestaña: rivales (presupuestos, equipos y profit) --- */
+function ligaTabRivales(c, d){
+  const act = state.actFull[c];
+  if (!act || !act.done) {
+    if (!act || !act.loading) setTimeout(() => loadFullActivity(c), 30);
+    return `<div class="card"><div class="empty-state"><div class="big">🕵️</div>
+      Analizando todo el historial de tu liga…<br>
+      <span style="font-size:11.5px;color:var(--text-3)">compras, ventas y cláusulas de cada mánager</span></div></div>`;
+  }
+  const B = computeBudgets(c);
+  if (!B) return `<div class="card"><div class="empty-state">Sin datos de clasificación todavía</div></div>`;
+  const pmap = purchaseMap(c);
+  const dates = act.items.map(a => { const dt = parseAct(a).date; return dt ? +String(dt).slice(0,10).replace(/-/g,"") : null; }).filter(Boolean);
+  const startInt = dates.length ? Math.min(...dates) : null;
+
+  return `
+  <div style="font-size:11.5px;color:var(--text-3);margin-bottom:10px;line-height:1.5">
+    Presupuesto estimado: 100M iniciales + ventas − compras${B.calibrated ? " + premios por puntos (calibrado con tu dinero real)" : ""}.
+    ${B.incomplete ? `<br><span style="color:var(--orange)">⚠ El historial visible no cubre toda la liga: tómalo como aproximación.</span>` : ""}
+  </div>
+  ${B.rows.map(r => {
+    const open = state.rivalOpen === r.tid;
+    const team = (state.rivalTeams[c] || {})[r.tid];
+    let bodyHtml = "";
+    if (open) {
+      if (!team) bodyHtml = `<div class="rival-body"><div class="empty-state" style="padding:18px">Cargando equipo…</div></div>`;
+      else if (team.error) bodyHtml = `<div class="rival-body"><div class="empty-state" style="padding:18px">${esc(team.error)}</div></div>`;
+      else {
+        const players = team.players || team.playerTeams || [];
+        bodyHtml = `<div class="rival-body">
+          <div class="budget-line" style="padding-top:10px"><span>Compras (${r.nBuys})</span><b class="down">−${fmtM(r.buys)}</b></div>
+          <div class="budget-line"><span>Ventas (${r.nSells})</span><b class="up">+${fmtM(r.sells)}</b></div>
+          ${r.extra ? `<div class="budget-line"><span>Premios estimados (${r.points} pts)</span><b class="${cls(r.extra)}">${fmtMSign(r.extra)}</b></div>` : ""}
+          <div class="budget-line total"><span>Presupuesto estimado</span><b style="color:var(--acc)">${fmtM(r.budget)} €</b></div>
+          ${players.map(x => {
+            const pm = x.playerMaster || x.player || x;
+            const pid = String(pm.id ?? "");
+            const local = state.byId[c].get(pid);
+            const val = local ? pVal(local) : (pm.marketValue != null ? +pm.marketValue : null);
+            const bought = pmap[r.tid + ":" + pid];
+            const paid = bought != null ? bought : (startInt ? histValueAt(c, pid, startInt) : null);
+            const profit = (val != null && paid != null) ? val - paid : null;
+            return ligaPlayerRow(pm, `<div class="p-right">
+              <div class="p-val">${val != null ? fmtM(val) + " €" : "—"}</div>
+              <div class="p-sub">${profit != null ? `<span class="delta-pill ${cls(profit)}">${fmtMSign(profit)}${bought == null ? " ≈" : ""}</span>` : ""}</div>
+            </div>`);
+          }).join("")}
+          ${players.length ? `<div style="font-size:10.5px;color:var(--text-3);padding:8px 14px">Profit = valor actual − lo que pagó. Con ≈ viene de la plantilla inicial: se usa su valor del día que arrancó la liga.</div>` : ""}
+        </div>`;
+      }
+    }
+    return `<div class="card rival-card ${r.isMe ? "obj-hit" : ""}">
+      <div class="rival-head" onclick="toggleRival('${r.tid}')">
+        <span class="rival-pos ${r.isMe ? "me" : ""}">${r.pos}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}${r.isMe ? ` <span class="badge acc" style="padding:1px 6px;font-size:9px">YO</span>` : ""}</div>
+          <div style="font-size:11px;color:var(--text-3)">${esc(r.manager)} · ${r.points} pts${r.teamValue != null ? " · equipo " + fmtM(r.teamValue) : ""}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:13.5px;font-weight:800;color:var(--acc);font-variant-numeric:tabular-nums">${fmtM(r.budget)} €</div>
+          <div style="font-size:10px;color:var(--text-3)">presupuesto est.</div>
+        </div>
+        <span style="color:var(--text-3);display:inline-block;transform:rotate(${open ? 90 : 0}deg);transition:transform .15s">›</span>
+      </div>
+      ${bodyHtml}
+    </div>`;
+  }).join("")}
+  <button class="btn-ghost" style="width:100%;margin-top:6px" onclick="loadFullActivity(comp(), true)">Recalcular con el historial más reciente</button>`;
+}
+
+/* --- pestaña: actividad --- */
+function ligaTabActividad(c, d){
+  const act = state.actFull[c];
+  const items = act && act.done ? act.items : unwrapList(d.activity) || [];
+  if (!items.length) return `<div class="card"><div class="empty-state"><div class="big">📭</div>Sin actividad reciente</div></div>`;
+  return `
+  ${!(act && act.done) ? `<button class="btn-ghost" style="width:100%;margin-bottom:10px" onclick="loadFullActivity(comp())">Cargar historial completo</button>` : `<div style="font-size:11.5px;color:var(--text-3);margin-bottom:10px">${items.length} operaciones en total</div>`}
+  <div class="card">${items.slice(0, 60).map(raw => {
+    const a = parseAct(raw);
+    const isSell = a.kind === "sell";
+    return `<div class="mv-row">
+      <div class="mv-icon ${isSell ? "sell" : "buy"}">${isSell ? IC.upar : IC.down}</div>
+      <div class="p-main">
+        <div class="p-name">${esc(a.name || a.kindRaw || "Operación")}</div>
+        <div class="p-meta">${esc(String(a.kindRaw))}${a.manager ? " · " + esc(a.manager) : ""}${a.date ? " · " + fmtDate(a.date) : ""}</div>
+      </div>
+      ${a.money != null ? `<div class="p-right"><div class="p-val">${fmtM(+a.money)} €</div></div>` : ""}
+    </div>`;
+  }).join("")}</div>`;
 }
 
 function diagHtml(){
@@ -2694,6 +3206,17 @@ function openMenu(){
         ? `<div class="badge green" style="margin-bottom:12px">${IC.bell.replace('class="ic"','class="ic" style="width:12px;height:12px"')} Avisos de objetivos activados</div>`
         : `<button class="btn-ghost" style="width:100%;margin-bottom:9px" onclick="Notification.requestPermission().then(()=>{closeModal();openMenu()})">${IC.bell.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Activar avisos de objetivos</button>`) : ""}
       <button class="btn-ghost" style="width:100%;margin-bottom:9px" onclick="closeModal();setView('liga')">${IC.user.replace('class="ic"','class="ic" style="width:14px;height:14px"')} ${state.auth ? "Mi Liga (cuenta conectada)" : "Enlazar mi cuenta del Fantasy"}</button>
+      <details class="card" style="padding:0;margin-bottom:9px">
+        <summary style="padding:12px 15px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-2);list-style:none">📬 Resumen diario por Telegram (configurar)</summary>
+        <div style="padding:0 15px 14px;font-size:12px;color:var(--text-2);line-height:1.65">
+          Cada mañana a las 8:45 puedes recibir en Telegram las subidas, bajadas y chollos del día. Configuración (una vez, 3 min):<br>
+          <b>1.</b> En Telegram, habla con <b>@BotFather</b> → /newbot → ponle nombre → te da un <b>token</b>.<br>
+          <b>2.</b> Escríbele un «hola» a tu bot recién creado, y luego abre
+          <span style="color:var(--acc)">api.telegram.org/botTU_TOKEN/getUpdates</span> en el navegador: el número en <b>"chat":{"id":…}</b> es tu <b>chat id</b>.<br>
+          <b>3.</b> En GitHub: <span style="color:var(--acc)">github.com/manugrraa/fantasy-studio</span> → Settings → Secrets and variables → Actions → New repository secret. Crea <b>TELEGRAM_BOT_TOKEN</b> (el token) y <b>TELEGRAM_CHAT_ID</b> (el número).<br>
+          Y listo: el resumen llega solo cada mañana. Sin los secrets, simplemente no se envía nada.
+        </div>
+      </details>
       <button class="btn-acc" style="width:100%" onclick="exportData()">Exportar mis datos</button>
       <button class="btn-ghost" style="width:100%;margin-top:9px" onclick="document.getElementById('importFile').click()">Importar datos</button>
       <button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" onclick="wipeData()">Borrar todos mis datos</button>
