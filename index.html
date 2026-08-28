@@ -1437,7 +1437,7 @@ function miniSpark(c, pid, days){
   if (!h || h.length < 3) return "";
   const pts = h.slice(-(days || 30));
   const vals = pts.map(e => e[1]);
-  const min = Math.min(...vals), max = Math.max(...vals);
+  const min = Math.min(...vals, projTo ?? Infinity), max = Math.max(...vals, projTo ?? -Infinity);
   const range = (max - min) || 1;
   const W = 58, H = 24, P = 2;
   const step = (W - P*2) / (pts.length - 1);
@@ -1591,6 +1591,27 @@ function minutesAlert(c, pid){
   if (mLast == null) return { sev: 2, txt: `no jugó la J${lastW}` };
   if (mLast < 30 && (mPrev == null || mPrev < 45)) return { sev: 1, txt: `solo ${mLast}' en la J${lastW}` };
   return null;
+}
+
+/* probabilidad de titularidad: partidos con 60'+ entre las jornadas jugadas
+   (minutos reales del volcado diario) */
+function starterProb(c, pid){
+  const mins = state.stats[c]?.mins?.[String(pid)];
+  const lastW = state.meta?.comps?.[c]?.previousWeek ?? ((state.meta?.comps?.[c]?.weekNumber || 1) - 1);
+  if (!lastW || lastW < 1) return null;
+  if (!mins) return { prob: 0, starts: 0, weeks: lastW };
+  let starts = 0;
+  for (let w = 1; w <= lastW; w++) {
+    if ((mins[String(w)] || 0) >= 60) starts++;
+  }
+  return { prob: starts / lastW, starts, weeks: lastW };
+}
+function starterBadge(c, pid){
+  const s = starterProb(c, pid);
+  if (!s || s.weeks < 1) return null;
+  if (s.prob >= 0.75) return { txt: "titular fijo", cls: "green", pct: s };
+  if (s.prob >= 0.4) return { txt: "rotación", cls: "orange", pct: s };
+  return { txt: "suplente", cls: "red", pct: s };
 }
 
 /* radar de regresos: vuelven de lesión/sanción con el valor aún hundido */
@@ -2155,7 +2176,8 @@ function openPlayer(pid){
             ${[[7,"7D"],[30,"1M"],[0,"Todo"]].map(([n,l]) => `<button class="${(window._chartRange ?? 0)===n?"sel":""}" onclick="setChartRange(${n})">${l}</button>`).join("")}
           </div>
         </div>
-        <div id="valueChart">${sparkline(hist, window._chartRange ?? 0)}</div>
+        <div id="valueChart">${sparkline(hist, window._chartRange ?? 0, projectValue(c, pid))}</div>
+        <div style="font-size:10.5px;color:var(--text-3);margin-top:2px">⇢ punteado: proyección a 7 días${(() => { const pv = projectValue(c, pid); return pv != null ? " (~" + fmtM(pv) + " €)" : ""; })()}</div>
         ${recHtml}
       </div>
       ${wp.length ? `<div class="chart-card"><h4>Puntos por jornada</h4><div class="bars">${bars}</div></div>` : ""}`;
@@ -2166,7 +2188,7 @@ function openPlayer(pid){
         <div class="mini-stats" style="margin:0">
           ${miniStat("nº " + rankPts, "En puntos")}
           ${miniStat("nº " + rankVal, "En valor")}
-          ${miniStat((p.weekPoints||[]).length, "Jornadas")}
+          ${(() => { const s = starterProb(c, pid); return miniStat(s && s.weeks ? Math.round(s.prob * 100) + " %" : "—", "Titularidad"); })()}
           ${miniStat(p.lastSeasonPoints ?? "—", "Pts 24/25")}
         </div>
       </div>`;
@@ -2184,7 +2206,13 @@ function openPlayer(pid){
               <span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
               ${t ? `<img src="${esc(t.badgeColor)}" alt=""> ${esc(t.name)}` : ""}
             </div>
-            ${stt && p.playerStatus !== "ok" ? `<div style="margin-top:7px"><span class="badge" style="color:${stt.color};border-color:${stt.color}">${stt.label}</span></div>` : ""}
+            ${(() => {
+              const chips2 = [];
+              if (stt && p.playerStatus !== "ok") chips2.push(`<span class="badge" style="color:${stt.color};border-color:${stt.color}">${stt.label}</span>`);
+              const sb = starterBadge(c, pid);
+              if (sb) chips2.push(`<span class="badge ${sb.cls}">${sb.txt} · ${sb.pct.starts}/${sb.pct.weeks} de inicio</span>`);
+              return chips2.length ? `<div style="margin-top:7px;display:flex;gap:5px;flex-wrap:wrap">${chips2.join("")}</div>` : "";
+            })()}
           </div>
         </div>
         <div class="pd-value-row">
@@ -2563,17 +2591,28 @@ function setChartRange(n){
   const c = comp();
   const hist = (state.history[c] || {})[window._modalPid] || [];
   const el = document.getElementById("valueChart");
-  if (el) el.innerHTML = sparkline(hist, n);
+  if (el) el.innerHTML = sparkline(hist, n, projectValue(c, window._modalPid));
   document.querySelectorAll(".chart-head .seg button").forEach(b =>
     b.classList.toggle("sel", b.textContent === (n===7?"7D":n===30?"1M":"Todo")));
 }
 
-function sparkline(hist, rangeDays){
+/* proyección de valor a 7 días con la pendiente reciente (misma matemática
+   que el objetivo inteligente) */
+function projectValue(c, pid){
+  const h = (state.history[c] || {})[String(pid)];
+  if (!h || h.length < 4) return null;
+  const seg = h.slice(-6);
+  const slope = (seg[seg.length - 1][1] - seg[0][1]) / (seg.length - 1);
+  const val = h[h.length - 1][1];
+  return Math.round(Math.max(val * 0.75, Math.min(val * 1.25, val + slope * 7)));
+}
+
+function sparkline(hist, rangeDays, projTo){
   if (!hist || hist.length < 2) return `<div style="font-size:12px;color:var(--text-3);padding:12px 0">Aún no hay histórico suficiente. Se irá acumulando cada día.</div>`;
   const pts = rangeDays ? hist.slice(-rangeDays) : hist.slice(-120);
   if (pts.length < 2) return `<div style="font-size:12px;color:var(--text-3);padding:12px 0">Sin datos suficientes en este rango.</div>`;
   const vals = pts.map(e => e[1]);
-  const min = Math.min(...vals), max = Math.max(...vals);
+  const min = Math.min(...vals, projTo ?? Infinity), max = Math.max(...vals, projTo ?? -Infinity);
   const range = (max - min) || 1;
   const W = 460, H = 110, PAD = 6;
   const step = (W - PAD*2) / (pts.length - 1);
@@ -2591,6 +2630,13 @@ function sparkline(hist, rangeDays){
     <polygon points="${PAD},${H-PAD} ${coords.join(" ")} ${W-PAD},${H-PAD}" fill="url(#sg)"/>
     <polyline points="${coords.join(" ")}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
     <circle cx="${coords[coords.length-1].split(",")[0]}" cy="${coords[coords.length-1].split(",")[1]}" r="3" fill="${col}"/>
+    ${projTo != null ? (() => {
+      const x0 = +coords[coords.length-1].split(",")[0], y0 = +coords[coords.length-1].split(",")[1];
+      const x1 = W - PAD, y1 = y(projTo);
+      const pcol = projTo >= vals[vals.length-1] ? "var(--green)" : "var(--red)";
+      return `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1.toFixed(1)}" stroke="${pcol}" stroke-width="2" stroke-dasharray="4 5" opacity=".8"/>
+        <circle cx="${x1}" cy="${y1.toFixed(1)}" r="3" fill="none" stroke="${pcol}" stroke-width="1.6"/>`;
+    })() : ""}
   </svg>
   <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-3);margin-top:4px">
     <span>${lbl(dFirst)}</span>
@@ -2874,6 +2920,12 @@ function scoreLocal(c, p){
   if (riv && riv.rival) {
     score += riv.level === 1 ? 1.5 : riv.level === 3 ? -1.5 : 0;
     why += ` · ${riv.home ? "vs" : "en"} ${riv.rival.shortName || riv.rival.name} ${riv.level === 1 ? "🟢" : riv.level === 3 ? "🔴" : "🟡"}`;
+  }
+  // la titularidad manda: un suplente no puntúa por bueno que sea
+  const sp = starterProb(c, p.id);
+  if (sp && sp.weeks >= 1) {
+    score += (sp.prob - 0.5) * 5;
+    if (sp.prob < 0.4) why += " · ⚠ suplente habitual";
   }
   if (p.playerStatus === "doubtful") { score -= 3; why += " · duda"; }
   return { score, why };
@@ -5232,6 +5284,7 @@ async function autoCheck(){
       render();
       checkTargets();
       updateBadge();
+      celebrateChanges(); // ⚽ ¿ha puntuado alguien mío desde el último refresco?
       // con sesión iniciada, repesca también la liga (mercado, dinero, actividad;
       // y si hay operaciones nuevas, las plantillas se invalidan solas)
       if (state.auth && state.myLeague[comp()]) loadLiga(true);
@@ -5240,6 +5293,84 @@ async function autoCheck(){
       toast("Datos actualizados automáticamente", "ok");
     }
   } catch(e) { /* sin red: lo intentamos más tarde */ }
+}
+
+/* ⚽ celebración en directo: si un jugador mío puntúa entre refresco y
+   refresco, se celebra con toast y vibración */
+function snapshotLivePts(){
+  const c = comp();
+  const wn = state.meta?.comps?.[c]?.weekNumber;
+  const ids = new Set([...(state.lineup[c]?.ids || []).map(String), ...state.squad[c].filter(e => !e.custom).map(e => String(e.pid))]);
+  const cur = {};
+  for (const pid of ids) {
+    const p = state.byId[c].get(pid);
+    const wp = p && (p.weekPoints || []).find(x => x.weekNumber === wn);
+    if (wp) cur[pid] = wp.points || 0;
+  }
+  return { c, wn, cur };
+}
+function celebrateChanges(){
+  const now = snapshotLivePts();
+  const prev = window._livePts;
+  window._livePts = now;
+  if (!prev || prev.c !== now.c || prev.wn !== now.wn) return;
+  for (const pid in now.cur) {
+    const before = prev.cur[pid];
+    const after = now.cur[pid];
+    if (before != null && after > before) {
+      const p = state.byId[now.c].get(pid);
+      if (p) {
+        toast(`⚽ ¡${p.nickname} está puntuando! +${after - before} (lleva ${after})`, "ok");
+        vibrate([40, 60, 40]);
+      }
+    }
+  }
+}
+
+/* ☀️ brief matinal: la primera apertura de cada día, resumen de novedades */
+function dailyBrief(){
+  const today = todayISO();
+  if (localStorage.getItem("fs_brief_day") === today) return;
+  const c = comp();
+  const items = [];
+  for (const w of state.watch[c]) {
+    if (!w.target) continue;
+    const p = state.byId[c].get(String(w.pid));
+    if (p && targetReached(w, pVal(p))) items.push(["🎯", `<b>${esc(p.nickname)}</b> está en tu precio objetivo (${fmtM(pVal(p))} €).`]);
+  }
+  for (const b of comebackRadar(c).slice(0, 2)) {
+    items.push(["🩹", `<b>${esc(b.p.nickname)}</b> ha vuelto, con −${fmtM(b.disc)} de descuento sobre su pico.`]);
+  }
+  for (const e of state.squad[c]) {
+    if (e.custom) continue;
+    const a = minutesAlert(c, e.pid);
+    if (a && a.sev === 2) {
+      const p = state.byId[c].get(String(e.pid));
+      if (p) items.push(["⏱", `<b>${esc(p.nickname)}</b> ${a.txt} — atento a su titularidad.`]);
+    }
+  }
+  let top = null;
+  for (const e of state.squad[c]) {
+    if (e.custom) continue;
+    const d = deltas(c, e.pid).d1;
+    if (d && (!top || Math.abs(d) > Math.abs(top.d))) top = { pid: e.pid, d };
+  }
+  if (top && Math.abs(top.d) >= 200000) {
+    const p = state.byId[c].get(String(top.pid));
+    if (p) items.push([top.d > 0 ? "🚀" : "📉", `<b>${esc(p.nickname)}</b> ${fmtMSign(top.d)} hoy, tu mayor movimiento.`]);
+  }
+  localStorage.setItem("fs_brief_day", today);
+  if (!items.length) return;
+  openModal(`
+    ${modalHead("☀️ Buenos días")}
+    <div class="modal-body">
+      <div style="font-size:12.5px;color:var(--text-3);margin-bottom:12px">${items.length === 1 ? "Una novedad" : items.length + " novedades"} desde tu última visita:</div>
+      ${items.slice(0, 5).map(([e, t]) => `<div class="card" style="padding:12px 14px;margin-bottom:8px;display:flex;gap:11px;align-items:flex-start">
+        <div style="font-size:19px">${e}</div>
+        <div style="font-size:12.5px;line-height:1.55;color:var(--text-2)">${t}</div>
+      </div>`).join("")}
+      <button class="btn-acc" style="width:100%;margin-top:6px" onclick="closeModal();setView('consejos')">Ver todos los consejos</button>
+    </div>`);
 }
 
 /* badge en el icono de la app (iOS 16.4+ instalada y Android):
@@ -5283,6 +5414,8 @@ function updateBadge(){
     render();
     checkTargets({ silent: true });
     updateBadge();
+    window._livePts = snapshotLivePts();
+    setTimeout(dailyBrief, 900); // brief matinal, solo la primera apertura del día
   }).catch(err => {
     document.getElementById("main").innerHTML =
       `<div class="empty-state"><div class="big">📡</div>No se pudieron cargar los datos.<br>
