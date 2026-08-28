@@ -582,7 +582,7 @@
    GitHub Actions. Plantilla, movimientos y vigilados viven en localStorage.
    ===================================================================== */
 
-const LS = { mode:"fs_mode", theme:"fs_theme", squad:"fs_squad_v1", moves:"fs_moves_v1", watch:"fs_watch_v1", cache:"fs_cache_v1", worker:"fs_worker", auth:"fs_auth_v1", league:"fs_league_v1" };
+const LS = { mode:"fs_mode", theme:"fs_theme", squad:"fs_squad_v1", moves:"fs_moves_v1", watch:"fs_watch_v1", favs:"fs_favs_v1", cache:"fs_cache_v1", worker:"fs_worker", auth:"fs_auth_v1", league:"fs_league_v1" };
 const API_BASE = "https://fantasy-api.llt-services.com/api";
 const PROXIES = [
   u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
@@ -620,6 +620,7 @@ const state = {
   squad: load(LS.squad, {"1":[], "2":[]}),
   moves: load(LS.moves, {"1":[], "2":[]}),
   watch: load(LS.watch, {"1":[], "2":[]}),
+  favs: load(LS.favs, {"1":[], "2":[]}),
   calFull: {},          // comp -> {weeks:{n:[...]}}
   stats: {},            // comp -> {keys:[...], players:{pid:[totales]}}
   filters: { q:"", pos:"", team:"", sort:"d1down", watchOnly:false, limit:100 },
@@ -653,6 +654,18 @@ function persist() {
   localStorage.setItem(LS.squad, JSON.stringify(state.squad));
   localStorage.setItem(LS.moves, JSON.stringify(state.moves));
   localStorage.setItem(LS.watch, JSON.stringify(state.watch));
+  localStorage.setItem(LS.favs, JSON.stringify(state.favs));
+}
+function isFav(pid){ return (state.favs[comp()] || []).includes(String(pid)); }
+function toggleFav(pid){
+  pid = String(pid);
+  const list = state.favs[comp()] || (state.favs[comp()] = []);
+  const i = list.indexOf(pid);
+  if (i >= 0) { list.splice(i, 1); toast("Quitado de favoritos"); }
+  else { list.push(pid); toast("⭐ Añadido a favoritos", "ok"); }
+  persist();
+  vibrate(10);
+  if (window._modalPid === pid) openPlayer(pid); else render();
 }
 function vibrate(ms){ if(navigator.vibrate){ try{ navigator.vibrate(ms); }catch(e){} } }
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -1155,6 +1168,9 @@ function viewResumen(){
   ${objRows.length ? `<div class="section-title">Objetivos de mercado ${IC.target.replace('class="ic"','class="ic" style="width:13px;height:13px"')}</div><div class="card" style="padding:2px 0">` +
       objRows.join("") + `</div>` : ""}
 
+  ${(state.favs[c] || []).length ? `<div class="section-title">⭐ Favoritos</div><div class="card">` +
+      state.favs[c].map(id => state.byId[c].get(id)).filter(Boolean).map(p => playerRow(p, { sub:"d1" })).join("") + `</div>` : ""}
+
   <div class="two-col">
     <div>
       <div class="section-title"><span class="up">▲</span> Top subidas hoy</div>
@@ -1246,6 +1262,7 @@ function playerRow(p, opts){
     <div class="p-main">
       <div class="p-name">${esc(p.nickname)}
         ${inSquad ? `<span class="badge acc" style="padding:1px 6px;font-size:9px">MÍO</span>` : ""}
+        ${isFav(p.id) ? `<span style="font-size:10px">⭐</span>` : ""}
         ${isWatched(p.id) ? `<span style="color:var(--acc);display:inline-flex">${IC.eye.replace('class="ic"','class="ic" style="width:12px;height:12px"')}</span>` : ""}
         ${stt && p.playerStatus !== "ok" ? `<span class="status-dot" style="background:${stt.color}" title="${stt.label}"></span>` : ""}
       </div>
@@ -1285,6 +1302,7 @@ function marketFiltered(){
   const q = norm(f.q || "");
   let list = (state.players[c] || []).filter(p => {
     if (f.watchOnly && !isWatched(p.id)) return false;
+    if (f.favOnly && !isFav(p.id)) return false;
     if (f.pos && String(p.positionId) !== f.pos) return false;
     if (f.team && String(p.teamId) !== f.team) return false;
     if (q && !norm(p.nickname).includes(q)) return false;
@@ -1318,6 +1336,7 @@ function viewMercado(){
     <button class="chip ${!f.pos?"active":""}" onclick="setF('pos','')">Todos</button>
     ${POS_ORDER.map(k => `<button class="chip ${f.pos===k?"active":""}" onclick="setF('pos','${k}')">${POS[k].tag}</button>`).join("")}
     <button class="chip ${f.watchOnly?"active":""}" onclick="setF('watchOnly',${!f.watchOnly})">Vigilados</button>
+    <button class="chip ${f.favOnly?"active":""}" onclick="setF('favOnly',${!f.favOnly})">⭐ Favoritos</button>
   </div>
   <div class="selects-row">
     <select onchange="setF('team',this.value)">
@@ -1762,27 +1781,13 @@ function openPlayer(pid){
   }
 
   window._modalPid = String(pid);
-  openModal(`
-    ${modalHead(esc(p.nickname))}
-    <div class="modal-body">
-      <div class="pd-hero">
-        <div class="pd-head" style="margin-bottom:10px">
-          <img class="pd-photo" src="${esc(p.image)}" alt="" onerror="this.style.visibility='hidden'">
-          <div style="flex:1;min-width:0">
-            <div class="pd-name">${esc(p.nickname)}</div>
-            <div class="pd-team">
-              <span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
-              ${t ? `<img src="${esc(t.badgeColor)}" alt=""> ${esc(t.name)}` : ""}
-            </div>
-            ${stt && p.playerStatus !== "ok" ? `<div style="margin-top:6px"><span class="badge" style="color:${stt.color};border-color:${stt.color}">${stt.label}</span></div>` : ""}
-          </div>
-        </div>
-        <div class="pd-value-row">
-          <div class="pd-value">${fmt(val)}</div>
-          <span style="font-size:18px;vertical-align:4px">${trendIcon(d.d1)}</span>
-        </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div>
-      </div>
+  const tab = window._pdTab || "resumen";
+  const pdTabs = [["resumen","Resumen"],["graficas","Gráficas"],["datos","Datos"]];
+  const fav = isFav(pid);
+
+  let tabBody = "";
+  if (tab === "resumen") {
+    tabBody = `
       <div class="mini-stats">
         ${miniStat(p.points ?? 0, "Puntos")}
         ${miniStat((p.averagePoints ?? 0).toLocaleString("es-ES",{maximumFractionDigits:1}), "Media")}
@@ -1790,8 +1795,9 @@ function openPlayer(pid){
         ${miniStat(ppm(p).toLocaleString("es-ES",{maximumFractionDigits:1}), "Pts/M€")}
       </div>
       ${ownHtml}
-      ${sigHtml}
-      ${seasonHtml}
+      ${sigHtml}`;
+  } else if (tab === "graficas") {
+    tabBody = `
       <div class="chart-card">
         <div class="chart-head"><h4>Valor de mercado</h4>
           <div class="seg">
@@ -1801,17 +1807,63 @@ function openPlayer(pid){
         <div id="valueChart">${sparkline(hist, window._chartRange ?? 0)}</div>
         ${recHtml}
       </div>
-      ${wp.length ? `<div class="chart-card"><h4>Puntos por jornada</h4><div class="bars">${bars}</div></div>` : ""}
+      ${wp.length ? `<div class="chart-card"><h4>Puntos por jornada</h4><div class="bars">${bars}</div></div>` : ""}`;
+  } else {
+    tabBody = `
+      ${seasonHtml || `<div class="chart-card" style="color:var(--text-3);font-size:12px">Las estadísticas de temporada se descargan cada madrugada.</div>`}
+      <div class="chart-card"><h4>Posición en la liga</h4>
+        <div class="mini-stats" style="margin:0">
+          ${miniStat("nº " + rankPts, "En puntos")}
+          ${miniStat("nº " + rankVal, "En valor")}
+          ${miniStat((p.weekPoints||[]).length, "Jornadas")}
+          ${miniStat(p.lastSeasonPoints ?? "—", "Pts 24/25")}
+        </div>
+      </div>`;
+  }
+
+  openModal(`
+    ${modalHead(esc(p.nickname))}
+    <div class="modal-body">
+      <div class="pd-hero">
+        <div class="pd-head" style="margin-bottom:12px">
+          <img class="pd-photo" style="width:92px;height:92px" src="${esc(p.image)}" alt="" onerror="this.style.visibility='hidden'">
+          <div style="flex:1;min-width:0">
+            <div class="pd-name" style="font-size:22px">${esc(p.nickname)} ${fav ? "⭐" : ""}</div>
+            <div class="pd-team" style="margin-top:6px">
+              <span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
+              ${t ? `<img src="${esc(t.badgeColor)}" alt=""> ${esc(t.name)}` : ""}
+            </div>
+            ${stt && p.playerStatus !== "ok" ? `<div style="margin-top:7px"><span class="badge" style="color:${stt.color};border-color:${stt.color}">${stt.label}</span></div>` : ""}
+          </div>
+        </div>
+        <div class="pd-value-row">
+          <div class="pd-value" style="font-size:30px">${fmt(val)}</div>
+          <span style="font-size:20px;vertical-align:5px">${trendIcon(d.d1)}</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">${chips}</div>
+      </div>
+
+      <div class="chips-row no-scrollbar" style="margin-bottom:12px">
+        ${pdTabs.map(([id,l]) => `<button class="chip ${tab === id ? "active" : ""}" onclick="setPdTab('${id}')">${l}</button>`).join("")}
+      </div>
+
+      ${tabBody}
+
       <div class="modal-actions">
         ${entry
           ? `<button class="btn-acc" onclick="openSell('${entry.id}')">Vender</button>`
           : `<button class="btn-acc" onclick="openBuy('${p.id}')">Fichar</button>`}
+        <button class="btn-ghost" onclick="toggleFav('${p.id}')">${fav ? "⭐ Quitar" : "☆ Favorito"}</button>
         <button class="btn-ghost" onclick="openWatchModal('${p.id}')">${IC.target.replace('class="ic"','class="ic" style="width:14px;height:14px"')} ${isWatched(pid) ? "Objetivo" : "Vigilar"}</button>
       </div>
       <a class="btn-ghost" style="width:100%;margin-top:9px;text-decoration:none" target="_blank" rel="noopener"
          href="https://www.sofascore.com/es/search?q=${encodeURIComponent(p.nickname)}">
          ${IC.ext.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Ver en Sofascore</a>
     </div>`);
+}
+function setPdTab(t){
+  window._pdTab = t;
+  if (window._modalPid) openPlayer(window._modalPid);
 }
 function miniStat(n, l){ return `<div class="mini-stat"><div class="n">${n}</div><div class="l">${l}</div></div>`; }
 
@@ -2514,81 +2566,105 @@ async function loadFullActivity(c, force){
   if (state.view === "liga") render();
 }
 
-/* normaliza un item de actividad a {kind, teamId, manager, pid, name, money, date} */
+/* Esquema REAL de la actividad (visto en LaLigaApp): activityTypeId
+   (1 compró en mercado · 31 fichó a otro mánager · 32 clausuló · 33 vendió ·
+   6 premio de jornada · 7 alineación incorrecta · 9 se unió · 4 blindó),
+   user1Id/user1Name = quien actúa, user2Id/user2Name = contraparte,
+   amount, playerMasterId/playerName/player, createdAt/timestamp. */
+const ACT_LABEL = { 1:"compró", 31:"fichó", 32:"clausuló", 33:"vendió", 6:"premio de jornada", 7:"alineación incorrecta", 9:"se unió a la liga", 4:"blindó" };
+
 function parseAct(a){
-  const pm = a.playerMaster || a.player || null;
-  const team = a.team || a.buyerTeam || null;
-  const kind0 = String(a.title || a.type || a.operation || "").toLowerCase();
-  let kind = "otro";
-  if (/venta|vendido|sold|sale/.test(kind0)) kind = "sell";
-  else if (/compra|fichaje|comprado|buy|bought|puja/.test(kind0)) kind = "buy";
-  else if (/cl[aá]usula|buyout/.test(kind0)) kind = "clause";
+  const t = +(a.activityTypeId ?? 0);
+  const pm = (a.playerMaster && typeof a.playerMaster === "object") ? a.playerMaster
+           : ((a.player && typeof a.player === "object") ? a.player : null);
+  const pid = a.playerMasterId ?? a.playerId ?? (pm ? pm.id : null);
   return {
-    id: String(a.id ?? a.activityId ?? (kind0 + (a.date || "") + (pm?.id || ""))),
-    kind,
-    kindRaw: a.title || a.type || a.operation || "",
-    teamId: team?.id != null ? String(team.id) : null,
-    manager: team?.manager?.managerName || team?.manager?.name || a.managerName || "",
-    pid: pm?.id != null ? String(pm.id) : null,
-    name: pm?.nickname || pm?.name || "",
-    money: a.money ?? a.amount ?? a.price ?? null,
-    date: a.date || a.createdAt || null,
+    id: String(a.id ?? a.activityId ?? `${t}|${a.createdAt ?? a.timestamp ?? ""}|${pid ?? ""}|${a.user1Id ?? a.user1Name ?? ""}|${a.amount ?? ""}`),
+    type: t,
+    user1Id: a.user1Id != null ? String(a.user1Id) : null,
+    user1Name: a.user1Name || null,
+    user2Id: a.user2Id != null ? String(a.user2Id) : null,
+    user2Name: a.user2Name || null,
+    pid: pid != null ? String(pid) : null,
+    name: (pm && (pm.nickname || pm.name)) || a.playerName || (typeof a.player === "string" ? a.player : "") || "",
+    money: a.amount ?? a.money ?? null,
+    date: a.createdAt ?? a.timestamp ?? a.date ?? null,
+    week: a.weekNumber ?? null,
+    desc: a.description || a.title || "",
   };
 }
 
-/* presupuestos estimados de todos los equipos a partir del historial completo.
-   Base: 100M + ventas − compras. Los ingresos que no vemos (premios por puntos,
-   jornadas…) se calibran con MI dinero real y se reparten por puntos. */
+/* managerId/managerName -> teamId, a partir de la clasificación */
+function managerMaps(c){
+  const d = state.liga.data[c];
+  const byId = new Map(), byName = new Map(), nameOf = new Map();
+  for (const r of (d && d.standing) || []) {
+    const team = r.team || r;
+    const m = team.manager || {};
+    const tid = String(team.id ?? "");
+    if (m.id != null) byId.set(String(m.id), tid);
+    if (m.managerName) { byName.set(m.managerName, tid); nameOf.set(tid, m.managerName); }
+  }
+  return { byId, byName, nameOf };
+}
+function actTeam(a, maps, which){
+  const id = which === 1 ? a.user1Id : a.user2Id;
+  const nm = which === 1 ? a.user1Name : a.user2Name;
+  return (id && maps.byId.get(id)) || (nm && maps.byName.get(nm)) || null;
+}
+
+/* presupuestos de todos los equipos a partir del historial completo.
+   100M iniciales + ventas − compras/cláusulas + premios de jornada REALES
+   (tipo 6 del historial); si la liga no los emitiera, 100.000 €/punto. */
 function computeBudgets(c){
   const d = state.liga.data[c];
   const act = state.actFull[c];
-  const standing = d?.standing || [];
-  if (!act?.done || !standing.length) return null;
+  const standing = (d && d.standing) || [];
+  if (!act || !act.done || !standing.length) return null;
+  const maps = managerMaps(c);
 
-  const by = {}; // teamId -> {buys, sells, nBuys, nSells}
+  const agg = {};
+  const A = tid => agg[tid] || (agg[tid] = { buys: 0, sells: 0, prizes: 0, nBuys: 0, nSells: 0 });
+  let hasPrizes = false;
   for (const raw of act.items) {
     const a = parseAct(raw);
-    if (!a.teamId || a.money == null) continue;
-    const t = by[a.teamId] || (by[a.teamId] = { buys: 0, sells: 0, nBuys: 0, nSells: 0 });
-    if (a.kind === "buy" || a.kind === "clause") { t.buys += +a.money; t.nBuys++; }
-    else if (a.kind === "sell") { t.sells += +a.money; t.nSells++; }
+    if (a.money == null) continue;
+    const m = Math.abs(+a.money);
+    const t1 = actTeam(a, maps, 1), t2 = actTeam(a, maps, 2);
+    if (a.type === 6) { if (t1) { A(t1).prizes += m; hasPrizes = true; } }
+    else if (a.type === 33) { if (t1) { A(t1).sells += m; A(t1).nSells++; } }
+    else if (a.type === 1 || a.type === 31 || a.type === 32) {
+      if (t1) { A(t1).buys += m; A(t1).nBuys++; }
+      if (t2) { A(t2).sells += m; A(t2).nSells++; } // el que recibe el traspaso/cláusula cobra
+    }
   }
 
-  const myId = state.myLeague[c]?.teamId;
-  const myMoney = ligaMoney(d?.money);
+  const myId = state.myLeague[c] && state.myLeague[c].teamId;
+  const myMoney = ligaMoney(d && d.money);
   const rows = standing.map((r, i) => {
     const team = r.team || r;
     const tid = String(team.id ?? "");
-    const ops = by[tid] || { buys: 0, sells: 0, nBuys: 0, nSells: 0 };
+    const ops = agg[tid] || { buys: 0, sells: 0, prizes: 0, nBuys: 0, nSells: 0 };
+    const points = +(r.points ?? r.teamPoints ?? 0);
+    const extra = hasPrizes ? ops.prizes : Math.round(100000 * points);
+    const base = INITIAL_BUDGET - ops.buys + ops.sells;
     return {
       tid, pos: r.position ?? i + 1,
-      name: team.name || team.manager?.managerName || "Equipo",
-      manager: team.manager?.managerName || team.manager?.name || "",
-      points: +(r.points ?? r.teamPoints ?? 0),
+      name: team.name || (team.manager && team.manager.managerName) || "Equipo",
+      manager: (team.manager && (team.manager.managerName || team.manager.name)) || "",
+      points,
       teamValue: team.teamValue != null ? +team.teamValue : null,
-      ...ops,
-      base: INITIAL_BUDGET - ops.buys + ops.sells,
-      isMe: myId && tid === String(myId),
+      ...ops, extra, base,
+      budget: (myId && tid === String(myId) && myMoney != null) ? myMoney : base + extra,
+      isMe: !!(myId && tid === String(myId)),
     };
   });
 
-  // norma del juego: cada punto conseguido paga 100.000 €
-  const rate = 100000;
-  // mi dinero real sirve de contraste: si la fórmula se desvía mucho de él,
-  // el historial visible no cubre toda la liga y lo avisamos
   let incomplete = false;
   const me = rows.find(r => r.isMe);
-  if (me && myMoney != null) {
-    const deviation = myMoney - (me.base + rate * me.points);
-    if (Math.abs(deviation) > 3000000) incomplete = true;
-  }
-  for (const r of rows) {
-    r.extra = Math.round(rate * r.points);
-    r.budget = r.isMe && myMoney != null ? myMoney : r.base + r.extra;
-  }
-  return { rows, calibrated: false, rate, incomplete };
+  if (me && myMoney != null && Math.abs(myMoney - (me.base + me.extra)) > 3000000) incomplete = true;
+  return { rows, hasPrizes, incomplete };
 }
-
 /* valor histórico de un jugador en una fecha (para profit de plantillas iniciales) */
 function histValueAt(c, pid, dateInt){
   const h = (state.history[c] || {})[String(pid)];
@@ -2598,20 +2674,21 @@ function histValueAt(c, pid, dateInt){
   return best[1];
 }
 
-/* mapa de precios de compra reales por equipo+jugador según la actividad */
+/* precios de compra reales por equipo+jugador según el historial */
 function purchaseMap(c){
   const act = state.actFull[c];
   const map = {};
-  if (!act?.done) return map;
+  if (!act || !act.done) return map;
+  const maps = managerMaps(c);
   for (const raw of act.items) {
     const a = parseAct(raw);
-    if ((a.kind === "buy" || a.kind === "clause") && a.teamId && a.pid && a.money != null) {
-      map[a.teamId + ":" + a.pid] = +a.money; // la actividad viene de nueva a vieja: nos quedamos la compra más reciente
+    if ((a.type === 1 || a.type === 31 || a.type === 32) && a.pid && a.money != null) {
+      const t1 = actTeam(a, maps, 1);
+      if (t1) map[t1 + ":" + a.pid] = Math.abs(+a.money);
     }
   }
   return map;
 }
-
 async function toggleRival(tid){
   const c = comp();
   state.rivalOpen = state.rivalOpen === tid ? null : tid;
@@ -2723,31 +2800,40 @@ async function syncRealMoves(){
   const act = state.actFull[c];
   if (!act?.done) { toast("No se pudo leer la actividad", "err"); return; }
   const myId = String(state.myLeague[c].teamId || "");
+  const maps = managerMaps(c);
   const existing = new Set(state.moves[c].map(m => m.actId).filter(Boolean));
   const news = [];
   for (const raw of act.items) {
     const a = parseAct(raw);
-    if (!a.teamId || a.teamId !== myId || a.money == null || !a.name) continue;
-    if (a.kind !== "buy" && a.kind !== "sell" && a.kind !== "clause") continue;
-    if (existing.has(a.id)) continue;
+    if (a.money == null || existing.has(a.id)) continue;
+    const t1 = actTeam(a, maps, 1), t2 = actTeam(a, maps, 2);
+    let kind = null;
+    if ((a.type === 1 || a.type === 31 || a.type === 32) && t1 === myId) kind = "buy";
+    else if ((a.type === 33 && t1 === myId) || ((a.type === 1 || a.type === 31 || a.type === 32) && t2 === myId)) kind = "sell";
+    if (!kind) continue;
+    const local = a.pid ? state.byId[c].get(a.pid) : null;
+    a.name = a.name || (local ? local.nickname : "");
+    if (!a.name) continue;
+    a._kind = kind;
     news.push(a);
   }
   if (!news.length) { toast("Movimientos ya al día con tu liga", "ok"); return; }
-  const buys = news.filter(a => a.kind !== "sell").length;
+  const buys = news.filter(a => a._kind === "buy").length;
   const sells = news.length - buys;
   if (!confirm(`Se importarán ${news.length} movimientos reales de tu liga (${buys} compras, ${sells} ventas). Las ventas calculan su beneficio contra tu precio de compra en Mi Plantilla si lo tienes. ¿Continuar?`)) return;
   for (const a of news.reverse()) { // de viejo a nuevo
     const date = a.date ? String(a.date).slice(0, 10) : todayISO();
-    if (a.kind === "sell") {
+    const money = Math.abs(+a.money);
+    if (a._kind === "sell") {
       const entry = state.squad[c].find(e => String(e.pid) === a.pid);
       const buyPrice = entry ? entry.buyPrice : null;
-      state.moves[c].push({ id: uid(), actId: a.id, real: true, type: "sell", pid: a.pid, name: a.name, price: +a.money, date, buyPrice, profit: buyPrice != null ? +a.money - buyPrice : null });
+      state.moves[c].push({ id: uid(), actId: a.id, real: true, type: "sell", pid: a.pid, name: a.name, price: money, date, buyPrice, profit: buyPrice != null ? money - buyPrice : null });
       if (entry) state.squad[c] = state.squad[c].filter(e => e.id !== entry.id);
     } else {
-      const local = state.byId[c].get(a.pid);
-      state.moves[c].push({ id: uid(), actId: a.id, real: true, type: "buy", pid: a.pid, name: a.name, pos: local ? String(local.positionId) : null, price: +a.money, date });
+      const local = a.pid ? state.byId[c].get(a.pid) : null;
+      state.moves[c].push({ id: uid(), actId: a.id, real: true, type: "buy", pid: a.pid, name: a.name, pos: local ? String(local.positionId) : null, price: money, date });
       if (a.pid && local && !squadEntry(a.pid)) {
-        state.squad[c].push({ id: uid(), pid: a.pid, name: a.name, pos: String(local.positionId), teamId: String(local.teamId), buyPrice: +a.money, buyDate: date, custom: false, imported: true });
+        state.squad[c].push({ id: uid(), pid: a.pid, name: a.name, pos: String(local.positionId), teamId: String(local.teamId), buyPrice: money, buyDate: date, custom: false, imported: true });
       }
     }
   }
@@ -2869,12 +2955,14 @@ function viewLiga(){
       ${diagHtml()}`;
   }
 
-  const TABS = [["mercado","Mercado del día"],["equipo","Mi equipo"],["rivales","Rivales"],["actividad","Actividad"]];
+  const TABS = [["mercado","Mercado del día"],["pujas","Mis pujas"],["ventas","Mis ventas"],["equipo","Mi equipo"],["rivales","Rivales"],["actividad","Actividad"]];
   const tabsHtml = `<div class="chips-row no-scrollbar" style="margin-bottom:12px">${TABS.map(([id,l]) =>
     `<button class="chip ${state.ligaTab === id ? "active" : ""}" onclick="state.ligaTab='${id}';render()">${l}</button>`).join("")}</div>`;
 
   let body = "";
   if (state.ligaTab === "mercado") body = ligaTabMercado(c, d);
+  else if (state.ligaTab === "pujas") body = ligaTabPujas(c, d);
+  else if (state.ligaTab === "ventas") body = ligaTabVentas(c, d);
   else if (state.ligaTab === "equipo") body = ligaTabEquipo(c, d);
   else if (state.ligaTab === "rivales") body = ligaTabRivales(c, d);
   else body = ligaTabActividad(c, d);
@@ -2946,6 +3034,57 @@ function bidFromMarket(idx){
     myBid ? { id: String(myBid.id ?? ""), money: +(myBid.money ?? 0) } : null);
 }
 
+/* --- pestaña: mis pujas activas (compras en curso) --- */
+function ligaTabPujas(c, d){
+  const market = d.market || [];
+  const rows = [];
+  market.forEach((it, idx) => {
+    const myBid = it.bid || it.myBid || null;
+    if (!myBid) return;
+    const pm = it.playerMaster || it.player || it;
+    const price = it.salePrice ?? it.price ?? pm.marketValue ?? 0;
+    const exp = it.expirationDate || it.expiration || null;
+    rows.push(ligaPlayerRow(pm, `<div class="p-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
+      <div><span class="p-val">${fmtM(+(myBid.money ?? 0))} €</span>
+        <div class="p-sub">salida ${fmtM(+price)}${exp ? " · hasta " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}</div></div>
+      <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();bidFromMarket(${idx})">Modificar / retirar</button>
+    </div>`));
+  });
+  if (!rows.length) return `<div class="card"><div class="empty-state"><div class="big">🤝</div>
+    No tienes pujas activas ahora mismo.<br>
+    <span style="font-size:11.5px;color:var(--text-3)">Puja desde «Mercado del día». Si acabas de pujar y no aparece, recarga con el botón de arriba.
+    Y si en la app oficial tienes pujas que aquí no salen, ve a Actividad → «Copiar muestra técnica» y pásasela a Claude.</span></div></div>`;
+  return `<div style="font-size:11.5px;color:var(--text-3);margin-bottom:8px">${rows.length} ${rows.length === 1 ? "puja activa" : "pujas activas"}</div>
+  <div class="card">${rows.join("")}</div>`;
+}
+
+/* --- pestaña: mis jugadores en venta --- */
+function ligaTabVentas(c, d){
+  const market = d.market || [];
+  const myId = String(state.myLeague[c]?.teamId || "");
+  const rows = [];
+  market.forEach((it) => {
+    if (!(it.sellerTeam?.id != null && String(it.sellerTeam.id) === myId)) return;
+    const pm = it.playerMaster || it.player || it;
+    const price = it.salePrice ?? it.price ?? 0;
+    const bids = it.numberOfBids ?? it.bids ?? 0;
+    const exp = it.expirationDate || it.expiration || null;
+    const local = state.byId[c].get(String(pm.id ?? ""));
+    const val = local ? pVal(local) : null;
+    rows.push(ligaPlayerRow(pm, `<div class="p-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
+      <div><span class="p-val">${fmtM(+price)} €</span>
+        <div class="p-sub">${bids} ${bids === 1 ? "puja" : "pujas"}${val != null ? " · mercado " + fmtM(val) : ""}${exp ? " · hasta " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}</div></div>
+      <button class="btn-ghost btn-danger" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();withdrawFromMarket('${esc(String(it.id))}','${esc(pm.nickname || "jugador")}')">Retirar</button>
+    </div>`));
+  });
+  if (!rows.length) return `<div class="card"><div class="empty-state"><div class="big">🏷️</div>
+    No tienes jugadores en venta.<br>
+    <span style="font-size:11.5px;color:var(--text-3)">Ponlos a la venta desde la pestaña «Mi equipo».</span></div></div>
+    <button class="btn-ghost" style="width:100%;margin-top:10px" onclick="state.ligaTab='equipo';render()">Ir a Mi equipo ›</button>`;
+  return `<div style="font-size:11.5px;color:var(--text-3);margin-bottom:8px">${rows.length} en venta</div>
+  <div class="card">${rows.join("")}</div>`;
+}
+
 /* --- pestaña: mi equipo real --- */
 function ligaTabEquipo(c, d){
   const teamPlayers = d.team ? (d.team.players || d.team.playerTeams || []) : [];
@@ -2991,7 +3130,7 @@ function ligaTabRivales(c, d){
 
   return `
   <div style="font-size:11.5px;color:var(--text-3);margin-bottom:10px;line-height:1.5">
-    Presupuesto estimado: 100M iniciales + ventas − compras + <b>100.000 € por punto</b>. Tu fila usa tu dinero real.
+    Presupuesto: 100M iniciales + ventas − compras + ${B.hasPrizes ? "<b>premios de jornada reales</b> (del historial de la liga)" : "<b>100.000 € por punto</b> (estimado)"}. Tu fila usa tu dinero real.
     ${B.incomplete ? `<br><span style="color:var(--orange)">⚠ La fórmula no cuadra con tu dinero real: el historial visible quizá no cubre toda la liga. Tómalo como aproximación.</span>` : ""}
   </div>
   ${B.rows.map(r => {
@@ -3006,8 +3145,8 @@ function ligaTabRivales(c, d){
         bodyHtml = `<div class="rival-body">
           <div class="budget-line" style="padding-top:10px"><span>Compras (${r.nBuys})</span><b class="down">−${fmtM(r.buys)}</b></div>
           <div class="budget-line"><span>Ventas (${r.nSells})</span><b class="up">+${fmtM(r.sells)}</b></div>
-          ${r.extra ? `<div class="budget-line"><span>Premios estimados (${r.points} pts)</span><b class="${cls(r.extra)}">${fmtMSign(r.extra)}</b></div>` : ""}
-          <div class="budget-line total"><span>Presupuesto estimado</span><b style="color:var(--acc)">${fmtM(r.budget)} €</b></div>
+          ${r.extra ? `<div class="budget-line"><span>${B.hasPrizes ? "Premios de jornada (reales)" : `Premios estimados (${r.points} pts)`}</span><b class="up">+${fmtM(r.extra)}</b></div>` : ""}
+          <div class="budget-line total"><span>Presupuesto${r.isMe ? " (tu dinero real)" : " estimado"}</span><b style="color:var(--acc)">${fmtM(r.budget)} €</b></div>
           ${players.map(x => {
             const pm = x.playerMaster || x.player || x;
             const pid = String(pm.id ?? "");
@@ -3049,20 +3188,42 @@ function ligaTabActividad(c, d){
   const act = state.actFull[c];
   const items = act && act.done ? act.items : unwrapList(d.activity) || [];
   if (!items.length) return `<div class="card"><div class="empty-state"><div class="big">📭</div>Sin actividad reciente</div></div>`;
+  const maps = managerMaps(c);
+  const who = (a, n) => (n === 1 ? a.user1Name : a.user2Name) || maps.nameOf.get(actTeam(a, maps, n)) || null;
   return `
-  ${!(act && act.done) ? `<button class="btn-ghost" style="width:100%;margin-bottom:10px" onclick="loadFullActivity(comp())">Cargar historial completo</button>` : `<div style="font-size:11.5px;color:var(--text-3);margin-bottom:10px">${items.length} operaciones en total</div>`}
-  <div class="card">${items.slice(0, 60).map(raw => {
+  ${!(act && act.done) ? `<button class="btn-ghost" style="width:100%;margin-bottom:10px" onclick="loadFullActivity(comp())">Cargar historial completo</button>`
+    : `<div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--text-3);margin-bottom:10px">
+        <span style="flex:1">${items.length} operaciones en total</span>
+        <button style="color:var(--acc);font-weight:600" onclick="copyRawActivity()">Copiar muestra técnica</button>
+      </div>`}
+  <div class="card">${items.slice(0, 80).map(raw => {
     const a = parseAct(raw);
-    const isSell = a.kind === "sell";
+    const gasto = a.type === 1 || a.type === 31 || a.type === 32;
+    const ingreso = a.type === 33 || a.type === 6;
+    const u1 = who(a, 1) || "Alguien", u2 = who(a, 2);
+    const money = a.money != null ? Math.abs(+a.money) : null;
+    let frase;
+    if (a.type === 6) frase = `<b>${esc(u1)}</b> ganó <b>${fmtM(money||0)} €</b> de premio${a.week ? " (J" + a.week + ")" : " de jornada"}`;
+    else if (a.type === 7) frase = `<b>${esc(u1)}</b> no puntuó por alineación incorrecta${a.week ? " (J" + a.week + ")" : ""}`;
+    else if (a.type === 9) frase = `<b>${esc(u1)}</b> se unió a la liga`;
+    else if (ACT_LABEL[a.type]) frase = `<b>${esc(u1)}</b> ${ACT_LABEL[a.type]}${a.name ? ` a <b>${esc(a.name)}</b>` : ""}${money ? ` por <b>${fmtM(money)} €</b>` : ""}${u2 ? ` a <b>${esc(u2)}</b>` : ""}`;
+    else frase = esc(a.desc || "Operación");
     return `<div class="mv-row">
-      <div class="mv-icon ${isSell ? "sell" : "buy"}">${isSell ? IC.upar : IC.down}</div>
+      <div class="mv-icon ${ingreso ? "sell" : gasto ? "buy" : ""}" ${!ingreso && !gasto ? 'style="background:var(--card-2);color:var(--text-3)"' : ""}>${ingreso ? IC.upar : gasto ? IC.down : IC.moves}</div>
       <div class="p-main">
-        <div class="p-name">${esc(a.name || a.kindRaw || "Operación")}</div>
-        <div class="p-meta">${esc(String(a.kindRaw))}${a.manager ? " · " + esc(a.manager) : ""}${a.date ? " · " + fmtDate(a.date) : ""}</div>
+        <div style="font-size:12.5px;line-height:1.5;color:var(--text-2)">${frase}</div>
+        <div class="p-meta">${a.date ? fmtDate(a.date) : ""}</div>
       </div>
-      ${a.money != null ? `<div class="p-right"><div class="p-val">${fmtM(+a.money)} €</div></div>` : ""}
     </div>`;
   }).join("")}</div>`;
+}
+
+/* copia los primeros items en bruto para depurar formatos nuevos de la API */
+async function copyRawActivity(){
+  const act = state.actFull[comp()];
+  const sample = JSON.stringify((act?.items || []).slice(0, 5), null, 1);
+  try { await navigator.clipboard.writeText(sample); toast("Muestra copiada: pégasela a Claude", "ok"); }
+  catch(e) { prompt("Copia esto:", sample.slice(0, 1500)); }
 }
 
 function diagHtml(){
@@ -3232,7 +3393,7 @@ function openMenu(){
 function exportData(){
   const payload = {
     app: "FantasyStudio", version: 1, exportedAt: new Date().toISOString(),
-    squad: state.squad, moves: state.moves, watch: state.watch,
+    squad: state.squad, moves: state.moves, watch: state.watch, favs: state.favs,
     league: state.myLeague, workerUrl: state.workerUrl || undefined, // la sesión (tokens) nunca se exporta
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -3254,6 +3415,7 @@ document.getElementById("importFile").addEventListener("change", async e => {
     state.squad = Object.assign({"1":[], "2":[]}, data.squad);
     state.moves = Object.assign({"1":[], "2":[]}, data.moves);
     state.watch = Object.assign({"1":[], "2":[]}, data.watch || {});
+    state.favs = Object.assign({"1":[], "2":[]}, data.favs || {});
     if (data.league) { state.myLeague = data.league; localStorage.setItem(LS.league, JSON.stringify(data.league)); }
     if (data.workerUrl && !state.workerUrl) { state.workerUrl = data.workerUrl; localStorage.setItem(LS.worker, data.workerUrl); }
     persist();
