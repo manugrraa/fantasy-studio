@@ -711,6 +711,63 @@ for (const c of ["1","2"]) {
 state.auth = load(LS.auth, null);
 state.myLeague = load(LS.league, {});
 
+/* ---------- pujas programadas ----------
+   Se guardan EN ESTE APARATO (no en la nube: si se sincronizaran, dos aparatos
+   podrían enviar la misma puja dos veces). Las ejecuta el reloj de abajo con la
+   app abierta — en el PC basta con dejarla en la bandeja. */
+state.schedBids = load("fs_schedbids_v1", {});
+for (const c of ["1","2"]) state.schedBids[c] = state.schedBids[c] || [];
+function persistSched(){ localStorage.setItem("fs_schedbids_v1", JSON.stringify(state.schedBids)); }
+const toLocalInput = d => { const p = n => String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+
+async function runSchedBids(){
+  const now = Date.now();
+  for (const c of ["1","2"]) {
+    const L = state.myLeague[c]?.leagueId;
+    for (const b of state.schedBids[c]) {
+      if (b.status !== "pendiente" || new Date(b.when).getTime() > now) continue;
+      if (b.expires && new Date(b.expires).getTime() < now) {
+        b.status = "fallo"; b.result = "el mercado del jugador ya había cerrado";
+        sysNotify("⏰ Puja no enviada", `${b.name}: ${b.result}`);
+        persistSched(); continue;
+      }
+      if (!state.auth || !L) continue; // sin sesión en este aparato: se reintenta al haberla
+      b.intentos = (b.intentos || 0) + 1;
+      try {
+        // si ya hay una puja mía sobre ese jugador, se modifica en vez de duplicar
+        const it = (state.liga.data[c]?.market || []).find(x => String(x.id) === String(b.marketId));
+        const myBid = it && (it.bid || it.myBid);
+        await (myBid?.id
+          ? authFetch(`/api/v1/competition/${c}/league/${L}/market/${b.marketId}/bid/${myBid.id}?x-lang=es`, { method:"PUT", body:{ money: b.amount } })
+          : authFetch(`/api/v1/competition/${c}/league/${L}/market/${b.marketId}/bid?x-lang=es`, { method:"POST", body:{ money: b.amount } }));
+        b.status = "hecha";
+        b.result = "enviada a las " + new Date().toLocaleTimeString("es-ES", { hour:"2-digit", minute:"2-digit" });
+        toast(`⏰ Puja de ${fmtM(b.amount)} por ${b.name} enviada`, "ok");
+        sysNotify("⏰ Puja enviada", `${fmtM(b.amount)} € por ${b.name}, como la programaste`);
+        loadLiga(true);
+      } catch(e) {
+        if ((b.intentos || 0) >= 3) {
+          b.status = "fallo"; b.result = e.message;
+          toast(`No se pudo enviar la puja por ${b.name}: ${e.message}`, "err");
+          sysNotify("⏰ Puja fallida", `${b.name}: ${e.message}`);
+        } // si no, el siguiente tick (30 s) reintenta
+      }
+      persistSched();
+      if (state.view === "liga") render();
+    }
+  }
+}
+setInterval(runSchedBids, 30000);
+function cancelSchedBid(id){
+  for (const c of ["1","2"]) {
+    const b = state.schedBids[c].find(x => x.id === id);
+    if (b && b.status === "pendiente" && !confirm(`¿Cancelar la puja programada por ${b.name}?`)) return;
+    state.schedBids[c] = state.schedBids[c].filter(x => x.id !== id);
+  }
+  persistSched();
+  render();
+}
+
 function comp() { return MODES[state.mode].comp; }
 function load(key, def) { try { const v = JSON.parse(localStorage.getItem(key)); return v ?? def; } catch(e){ return def; } }
 function persist() {
@@ -3971,11 +4028,14 @@ async function ligaAction(desc, fn){
   }
 }
 
-function openBidModal(marketId, pidStr, price, myBid){
+function openBidModal(marketId, pidStr, price, myBid, exp){
   const c = comp();
   const p = state.byId[c].get(String(pidStr));
   const name = p?.nickname || "el jugador";
   const money = ligaMoney(state.liga.data[c]?.money);
+  // hora propuesta para programar: 10 min antes del cierre del jugador
+  const defWhen = toLocalInput(exp ? new Date(new Date(exp).getTime() - 10 * 60000) : new Date(Date.now() + 3600000));
+  const yaProg = state.schedBids[c].find(b => b.marketId === String(marketId) && b.status === "pendiente");
   openModal(`
     ${modalHead((myBid ? "Modificar puja · " : "Pujar por ") + esc(name))}
     <div class="modal-body">
@@ -3988,6 +4048,20 @@ function openBidModal(marketId, pidStr, price, myBid){
       <div id="bidSim" style="margin-bottom:12px"></div>
       <button class="btn-acc" style="width:100%" id="bidGo">${myBid ? "Guardar puja" : "Confirmar puja"}</button>
       ${myBid?.id ? `<button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" id="bidCancel">Retirar mi puja</button>` : ""}
+      <details style="margin-top:13px" ${yaProg ? "open" : ""}>
+        <summary style="cursor:pointer;font-size:12.5px;color:var(--text-2);font-weight:600;list-style:none">⏰ Programar la puja para más tarde ›</summary>
+        <div style="padding-top:11px">
+          ${yaProg ? `<div class="card" style="padding:9px 12px;margin-bottom:10px;font-size:12px">Ya hay una programada: <b>${fmtM(yaProg.amount)} €</b> a las <b>${new Date(yaProg.when).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})}</b>. Programar otra la sustituye.</div>` : ""}
+          <div style="font-size:11.5px;color:var(--text-3);line-height:1.55;margin-bottom:10px">
+            La puja de arriba se enviará sola a la hora elegida, y así los rivales no ven tu interés hasta el final.
+            Hace falta que la app esté abierta <b>en este aparato</b> a esa hora (en el PC vale con dejarla en la bandeja).
+          </div>
+          <div class="field" style="margin-bottom:10px"><label>Enviar a las</label>
+            <input id="bidWhen" type="datetime-local" value="${defWhen}">
+          </div>
+          <button class="btn-ghost" style="width:100%" id="bidSched">Programar puja</button>
+        </div>
+      </details>
     </div>`, ov => {
       bindMoney(ov.querySelector("#bidAmount"));
       // simulador: ¿a quién superas con esta cantidad?
@@ -4034,6 +4108,24 @@ function openBidModal(marketId, pidStr, price, myBid){
         const L = state.myLeague[c].leagueId;
         ligaAction("Puja retirada", () =>
           authFetch(`/api/v1/competition/${c}/league/${L}/market/${marketId}/bid/${myBid.id}/cancel?x-lang=es`, { method:"DELETE" }));
+      });
+      ov.querySelector("#bidSched")?.addEventListener("click", () => {
+        const amount = moneyVal(ov.querySelector("#bidAmount"));
+        const val = ov.querySelector("#bidWhen")?.value;
+        const when = val ? new Date(val) : null;
+        if (!amount || amount < +price) { toast("La puja debe ser al menos el precio de salida", "err"); return; }
+        if (money != null && amount > money) { toast("No te llega el dinero para esa puja", "err"); return; }
+        if (!when || isNaN(when) || when.getTime() <= Date.now()) { toast("Elige una hora futura", "err"); return; }
+        if (exp && when.getTime() >= new Date(exp).getTime()) { toast("A esa hora el mercado de " + name + " ya habrá cerrado (cierra a las " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) + ")", "err"); return; }
+        const hora = when.toLocaleString("es-ES", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
+        if (!confirm(`¿Programar una puja de ${fmt(amount)} por ${name} para el ${hora}? Se enviará sola a tu liga REAL desde este aparato.`)) return;
+        state.schedBids[c] = state.schedBids[c].filter(b => !(b.marketId === String(marketId) && b.status === "pendiente"));
+        state.schedBids[c].push({ id: uid(), marketId: String(marketId), pid: String(pidStr), name,
+          amount, when: when.toISOString(), expires: exp || null, status: "pendiente", intentos: 0, createdAt: new Date().toISOString() });
+        persistSched();
+        closeModal();
+        toast("⏰ Puja programada para el " + hora, "ok");
+        render();
       });
     });
 }
@@ -4449,7 +4541,8 @@ function bidFromMarket(idx){
   const pm = it.playerMaster || it.player || it;
   const myBid = it.bid || it.myBid || null;
   openBidModal(String(it.id), String(pm.id ?? ""), +(it.salePrice ?? it.price ?? pm.marketValue ?? 0),
-    myBid ? { id: String(myBid.id ?? ""), money: +(myBid.money ?? 0) } : null);
+    myBid ? { id: String(myBid.id ?? ""), money: +(myBid.money ?? 0) } : null,
+    it.expirationDate || it.expiration || null);
 }
 
 /* --- pestaña: mis pujas activas (compras en curso) --- */
@@ -4468,12 +4561,27 @@ function ligaTabPujas(c, d){
       <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();bidFromMarket(${idx})">Modificar / retirar</button>
     </div>`));
   });
-  if (!rows.length) return `<div class="card"><div class="empty-state"><div class="big">🤝</div>
+  // pujas programadas de este aparato: pendientes siempre; hechas/fallidas, 24 h
+  const sched = (state.schedBids[c] || []).filter(b =>
+    b.status === "pendiente" || Date.now() - new Date(b.when).getTime() < 86400000);
+  const schedHtml = sched.length ? `
+    <div class="section-title">⏰ Pujas programadas</div>
+    <div class="card" style="margin-bottom:12px">${sched.map(b => `
+      <div class="p-row" style="cursor:default">
+        <div class="p-main"><div class="p-name">${esc(b.name)}</div>
+          <div class="p-meta">${b.status === "pendiente"
+            ? `se enviará el ${new Date(b.when).toLocaleString("es-ES",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}`
+            : b.status === "hecha" ? `<span class="up">✔ ${esc(b.result || "enviada")}</span>` : `<span class="down">✖ ${esc(b.result || "falló")}</span>`}</div></div>
+        <div class="p-right"><div class="p-val">${fmtM(b.amount)} €</div>
+          <button class="btn-ghost ${b.status === "pendiente" ? "btn-danger" : ""}" style="padding:5px 10px;font-size:11px;margin-top:4px" onclick="cancelSchedBid('${esc(b.id)}')">${b.status === "pendiente" ? "Cancelar" : "Quitar"}</button></div>
+      </div>`).join("")}</div>
+    <div style="font-size:10.5px;color:var(--text-3);margin:-6px 4px 12px">Se envían solas desde este aparato con la app abierta (en el PC, con dejarla en la bandeja vale).</div>` : "";
+  if (!rows.length && !schedHtml) return `<div class="card"><div class="empty-state"><div class="big">🤝</div>
     No tienes pujas activas ahora mismo.<br>
-    <span style="font-size:11.5px;color:var(--text-3)">Puja desde «Mercado del día». Si acabas de pujar y no aparece, recarga con el botón de arriba.
+    <span style="font-size:11.5px;color:var(--text-3)">Puja desde «Mercado del día» — ahí también puedes dejarla programada para el último momento. Si acabas de pujar y no aparece, recarga con el botón de arriba.
     Y si en la app oficial tienes pujas que aquí no salen, ve a Actividad → «Copiar muestra técnica» y pásasela a Claude.</span></div></div>`;
-  return `<div style="font-size:11.5px;color:var(--text-3);margin-bottom:8px">${rows.length} ${rows.length === 1 ? "puja activa" : "pujas activas"}</div>
-  <div class="card">${rows.join("")}</div>`;
+  return `${schedHtml}${rows.length ? `<div style="font-size:11.5px;color:var(--text-3);margin-bottom:8px">${rows.length} ${rows.length === 1 ? "puja activa" : "pujas activas"}</div>
+  <div class="card">${rows.join("")}</div>` : ""}`;
 }
 
 /* --- pestaña: mis jugadores en venta --- */
@@ -4980,6 +5088,32 @@ function weekPts(c, pid, week){
   return wp ? (wp.points || 0) : null;
 }
 
+/* Plantilla que tenía un equipo cuando ARRANCÓ la jornada, como puntúa el juego:
+   los fichados con la jornada en marcha no cuentan y los vendidos siguen contando.
+   Se parte de la plantilla actual y se deshacen, de hoy hacia atrás, las
+   operaciones del historial posteriores al arranque. */
+function squadAtWeekStart(c, tid, curIds){
+  const ids = new Set(curIds.map(String));
+  const week = state.meta?.comps?.[c];
+  const open = week?.openingWeekDate ? new Date(week.openingWeekDate).getTime() : null;
+  const act = state.actFull[c];
+  if (!open || !act?.done) return ids;
+  const maps = managerMaps(c);
+  const T = String(tid);
+  for (const raw of act.items) { // vienen de lo más nuevo a lo más viejo
+    const a = parseAct(raw);
+    if (!a.pid || !a.date || new Date(a.date).getTime() < open) continue;
+    const t1 = actTeam(a, maps, 1), t2 = actTeam(a, maps, 2);
+    if (a.type === 1 || a.type === 31 || a.type === 32) { // t1 adquirió (a t2, si era de un rival)
+      if (t1 != null && String(t1) === T) ids.delete(String(a.pid));
+      if (t2 != null && String(t2) === T) ids.add(String(a.pid));
+    } else if (a.type === 33) { // t1 vendió al banco
+      if (t1 != null && String(t1) === T) ids.add(String(a.pid));
+    }
+  }
+  return ids;
+}
+
 function ligaTabDirecto(c, d){
   const week = state.meta?.comps?.[c];
   const wn = week?.weekNumber;
@@ -5034,8 +5168,10 @@ function ligaTabDirecto(c, d){
         if (r.isMe && lu?.ids?.length) {
           jpts = lu.ids.reduce((a, pid) => a + (weekPts(c, pid, wn) || 0), 0);
         } else if (team && !team.error) {
-          const all = (team.players || team.playerTeams || [])
-            .map(x => { const pm = x.playerMaster || x.player || x; return weekPts(c, pm.id, wn) || 0; })
+          // puntúa la plantilla de cuando arrancó la jornada, no la de ahora
+          const curIds = (team.players || team.playerTeams || []).map(x => String((x.playerMaster || x.player || x).id ?? ""));
+          const all = [...squadAtWeekStart(c, r.tid, curIds)]
+            .map(pid => weekPts(c, pid, wn) || 0)
             .sort((a, b) => b - a).slice(0, 11);
           jpts = all.reduce((a, b) => a + b, 0);
         }
@@ -5053,7 +5189,7 @@ function ligaTabDirecto(c, d){
         </div>`;
       }).join("")}</div>
       <div style="font-size:10.5px;color:var(--text-3);margin-top:8px;padding:0 4px">
-        Estimación con las 11 mejores puntuaciones de cada plantilla en la J${wn} (los onces reales de los rivales no son visibles). Toca un equipo para ver sus jugadores y puntos. Los datos entran solos cada ~15 min.
+        Estimación con las 11 mejores puntuaciones de la <b>plantilla que tenía cada equipo al arrancar la J${wn}</b>: los fichajes hechos con la jornada en marcha no suman y los vendidos siguen sumando, como en el juego (los onces reales de los rivales no son visibles). Toca un equipo para ver sus jugadores y puntos. Los datos entran solos cada ~15 min.
       </div>`;
     }
   }
@@ -5089,15 +5225,25 @@ function openRivalLive(tid){
   }
   const lu = isMe ? state.lineup[c] : null;
   const luIds = lu?.ids?.length ? new Set(lu.ids.map(String)) : null;
+  const curIds = (team.players || team.playerTeams || []).map(x => String((x.playerMaster || x.player || x).id ?? ""));
+  const frozen = squadAtWeekStart(c, String(tid), curIds);
   const players = (team.players || team.playerTeams || []).map(x => {
     const pm = x.playerMaster || x.player || x;
     const pid = String(pm.id ?? "");
-    return { pm, pid, pts: weekPts(c, pid, wn) };
-  }).sort((a, b) => (b.pts ?? -99) - (a.pts ?? -99));
-  // qué puntuaciones cuentan: mi once real si existe; para rivales, sus 11 mejores
+    return { pm, pid, pts: weekPts(c, pid, wn), enJornada: frozen.has(pid) };
+  });
+  // vendidos con la jornada en marcha: ya no están en la plantilla, pero sus puntos siguen contando
+  for (const pid of frozen) {
+    if (players.some(x => x.pid === pid)) continue;
+    const p = state.byId[c].get(pid);
+    if (p) players.push({ pm: p, pid, pts: weekPts(c, pid, wn), enJornada: true, vendido: true });
+  }
+  players.sort((a, b) => (b.pts ?? -99) - (a.pts ?? -99));
+  // qué puntuaciones cuentan: mi once real si existe; para rivales, las 11 mejores
+  // de la plantilla del arranque de la jornada
   const counted = luIds
     ? new Set(players.filter(x => luIds.has(x.pid)).map(x => x.pid))
-    : new Set(players.filter(x => x.pts != null).slice(0, 11).map(x => x.pid));
+    : new Set(players.filter(x => x.pts != null && x.enJornada).slice(0, 11).map(x => x.pid));
   const jpts = players.reduce((a, x) => a + (counted.has(x.pid) ? (x.pts || 0) : 0), 0);
   const scored = players.filter(x => x.pts != null).length;
   openModal(`
@@ -5109,15 +5255,15 @@ function openRivalLive(tid){
       </div>
       <div class="card">${players.map(x => {
         const badge = counted.has(x.pid)
-          ? `<span class="badge acc" style="padding:1px 6px;font-size:9px">${luIds ? "ONCE" : "CUENTA"}</span>`
-          : `<span style="color:var(--text-3)">${x.pts == null ? "sin puntuar" : "no cuenta"}</span>`;
+          ? `<span class="badge acc" style="padding:1px 6px;font-size:9px">${luIds ? "ONCE" : "CUENTA"}</span>${x.vendido ? ` <span style="color:var(--text-3);font-size:10px">vendido, sigue contando</span>` : ""}`
+          : `<span style="color:var(--text-3)">${!x.enJornada ? "fichado en jornada · no cuenta" : x.pts == null ? "sin puntuar" : "no cuenta"}</span>`;
         return ligaPlayerRow(x.pm, `<div class="p-right">
           <div class="p-val ${x.pts != null ? (x.pts >= 5 ? "up" : x.pts < 0 ? "down" : "") : ""}">${x.pts != null ? x.pts + " pts" : "—"}</div>
           <div class="p-sub">${badge}</div>
         </div>`);
       }).join("")}</div>
       <div style="font-size:10.5px;color:var(--text-3);margin-top:8px">
-        ${luIds ? "Cuentan los 11 de tu once." : "El once real del rival no es visible: cuentan sus 11 mejores puntuaciones de la J" + wn + "."}
+        ${luIds ? "Cuentan los 11 de tu once." : "El once real del rival no es visible: cuentan las 11 mejores puntuaciones de la plantilla que tenía al arrancar la J" + wn + " — los fichajes de después no suman y los vendidos siguen sumando, como en el juego."}
         ${week.isLive ? " Los puntos entran solos cada ~15 min: puedes dejar la ficha abierta." : ""}
         Toca un jugador para abrir su ficha.
       </div>
