@@ -642,6 +642,9 @@
    ===================================================================== */
 
 const LS = { mode:"fs_mode", theme:"fs_theme", squad:"fs_squad_v1", moves:"fs_moves_v1", watch:"fs_watch_v1", favs:"fs_favs_v1", cache:"fs_cache_v1", worker:"fs_worker", auth:"fs_auth_v1", league:"fs_league_v1" };
+/* App de escritorio (Electron): llama a la API sin CORS, hace el login en una
+   ventana propia y mantiene los datos al día desde el PC. En el móvil no existe. */
+const DESK = (typeof window !== "undefined" && window.fsDesktop) || null;
 const API_BASE = "https://fantasy-api.llt-services.com/api";
 const PROXIES = [
   u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
@@ -3466,15 +3469,23 @@ function fantasyLogout(){
 }
 
 async function authFetch(path, opts){
-  if (!state.workerUrl) throw new Error("Falta configurar el servidor puente");
+  if (!DESK && !state.workerUrl) throw new Error("Falta configurar el servidor puente");
   if (!state.auth) throw new Error("Inicia sesión primero");
   if (!authValid()) await fantasyRefresh();
-  const doFetch = () => fetch(state.workerUrl.replace(/\/+$/, "") + path, {
+  const headers = () => ({
+    "Authorization": "Bearer " + state.auth.access_token, "x-lang": "es",
+    ...(opts && opts.body ? { "Content-Type": "application/json" } : {}),
+  });
+  // en el PC no hay CORS: se llama a la API oficial directamente, sin el puente
+  const doFetch = () => DESK
+    ? DESK.apiFetch(path, {
+        method: (opts && opts.method) || "GET",
+        headers: headers(),
+        body: opts && opts.body ? JSON.stringify(opts.body) : undefined,
+      })
+    : fetch(state.workerUrl.replace(/\/+$/, "") + path, {
     method: (opts && opts.method) || "GET",
-    headers: {
-      "Authorization": "Bearer " + state.auth.access_token, "x-lang": "es",
-      ...(opts && opts.body ? { "Content-Type": "application/json" } : {}),
-    },
+    headers: headers(),
     body: opts && opts.body ? JSON.stringify(opts.body) : undefined,
     signal: AbortSignal.timeout(15000),
   });
@@ -4204,8 +4215,8 @@ function ligaPlayerRow(pm, right, opts){
 function viewLiga(){
   const c = comp();
 
-  // Paso 1: servidor puente
-  if (!state.workerUrl) {
+  // Paso 1: servidor puente (en el PC no hace falta: se llama a la API directamente)
+  if (!state.workerUrl && !DESK) {
     return `
     <div class="section-title">${IC.user.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Mi Liga — configuración (solo una vez)</div>
     <div class="card" style="padding:16px;margin-bottom:12px;font-size:13px;line-height:1.6;color:var(--text-2)">
@@ -4228,15 +4239,20 @@ function viewLiga(){
 
   // Paso 2: login
   if (!state.auth) {
-    setTimeout(prepareSocial, 30); // deja el enlace de Google listo ANTES del toque (Safari bloquea popups asíncronos)
+    if (!DESK) setTimeout(prepareSocial, 30); // deja el enlace de Google listo ANTES del toque (Safari bloquea popups asíncronos)
     return `
     <div class="section-title">${IC.lock.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Iniciar sesión en LaLiga Fantasy</div>
     <div class="card" style="padding:16px;margin-bottom:12px">
-      <div style="font-size:13px;color:var(--text-2);line-height:1.55;margin-bottom:14px">
+      ${DESK ? `<div style="font-size:13px;color:var(--text-2);line-height:1.55;margin-bottom:14px">
+        <b>¿Entras al Fantasy con Google, Apple o Facebook?</b> Pulsa aquí: se abre la página
+        <b>oficial</b> de LaLiga en una ventana y, al terminar, la sesión se conecta sola.
+      </div>
+      <button class="btn-acc" id="socialLink" style="width:100%" onclick="socialDesktop()">${IC.user.replace('class="ic"','class="ic" style="width:16px;height:16px"')} Entrar con Google / Apple / Facebook</button>`
+      : `<div style="font-size:13px;color:var(--text-2);line-height:1.55;margin-bottom:14px">
         <b>¿Entras al Fantasy con Google, Apple o Facebook?</b> Usa este botón. Se abre la página
         <b>oficial</b> de LaLiga para que inicies sesión como siempre; al terminar, copia el enlace y pégalo aquí.
       </div>
-      <a class="btn-acc" id="socialLink" style="width:100%;text-decoration:none;opacity:.6;pointer-events:none" href="#" target="_blank" rel="noopener" onclick="return socialClicked()">${IC.user.replace('class="ic"','class="ic" style="width:16px;height:16px"')} Entrar con Google / Apple / Facebook</a>
+      <a class="btn-acc" id="socialLink" style="width:100%;text-decoration:none;opacity:.6;pointer-events:none" href="#" target="_blank" rel="noopener" onclick="return socialClicked()">${IC.user.replace('class="ic"','class="ic" style="width:16px;height:16px"')} Entrar con Google / Apple / Facebook</a>`}
       <div id="socialStep"></div>
     </div>
 
@@ -5290,6 +5306,25 @@ function socialClicked(){
     </div>`;
   return true; // deja que el enlace navegue (nueva pestaña / Safari)
 }
+/* Login en la app de PC: la ventana oficial de LaLiga se abre aquí dentro y la
+   vuelta (?code=…) se recoge sola, sin copiar ni pegar nada. */
+async function socialDesktop(){
+  const btn = document.getElementById("socialLink");
+  if (btn) { btn.disabled = true; btn.textContent = "Abriendo la página de LaLiga…"; }
+  try {
+    const url = await buildSocialUrl();
+    const vuelta = await DESK.oauth(url, AUTHCFG.socialRedirect);
+    if (!vuelta) throw new Error("Se cerró la ventana antes de terminar");
+    await socialExchange(vuelta);
+    toast("Sesión iniciada", "ok");
+    state.liga = { loading:false, data:{}, errors:[] };
+    render();
+    loadLiga(true);
+  } catch(e) {
+    toast(e.message, "err");
+    if (btn) { btn.disabled = false; btn.textContent = "Entrar con Google / Apple / Facebook"; }
+  }
+}
 async function finishSocial(){
   const inp = document.getElementById("socialUrl");
   const btn = document.getElementById("socialGo");
@@ -5344,6 +5379,41 @@ function importLigaSquad(){
 /* =====================================================================
    MENÚ: EXPORTAR / IMPORTAR
    ===================================================================== */
+/* Panel del motor de datos (solo en la app de PC): este ordenador actualiza los
+   valores a la 01:00 y los sube, así el iPhone los recibe igual. */
+function motorHtml(st){
+  if (!st) { setTimeout(async () => refrescaMotor(await DESK.motorEstado()), 20); return `<div style="font-size:12.5px;color:var(--text-3)">Cargando el motor de datos…</div>`; }
+  const cuando = st.ultimo ? new Date(st.ultimo.at).toLocaleTimeString("es-ES", { hour:"2-digit", minute:"2-digit" }) : null;
+  return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:700;flex:1">🖥 Motor de datos de este PC</div>
+      <span class="badge ${st.activo ? "green" : ""}" style="font-size:10px">${st.activo ? "activo" : "en pausa"}</span>
+    </div>
+    <div style="font-size:12px;color:var(--text-2);line-height:1.6;margin-bottom:11px">
+      Actualiza los valores a la <b>01:00</b> (cuando los publica el juego) y cada cuarto de hora durante el día,
+      y los sube para que tu iPhone también los tenga.
+      ${cuando ? `<br>Última vez: <b>${cuando}</b> · <span class="${st.ultimo.ok ? "up" : "down"}">${esc(st.ultimo.msg)}</span>` : ""}
+    </div>
+    ${st.log?.length ? `<div style="font-size:11px;color:var(--text-3);line-height:1.7;margin-bottom:11px;max-height:88px;overflow:auto">
+      ${st.log.slice(0,5).map(l => `${new Date(l.at).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"})} · ${esc(l.txt)}`).join("<br>")}</div>` : ""}
+    <div style="display:flex;gap:8px">
+      <button class="btn-acc" style="flex:1;padding:8px;font-size:12px" ${st.corriendo ? "disabled" : ""} onclick="motorAhora()">${st.corriendo ? "Actualizando…" : "Actualizar ahora"}</button>
+      <button class="btn-ghost" style="flex:1;padding:8px;font-size:12px" onclick="motorToggle(${st.activo ? "false" : "true"})">${st.activo ? "Pausar" : "Activar"}</button>
+    </div>`;
+}
+function refrescaMotor(st){
+  const box = document.getElementById("motorCard");
+  if (box && st) box.innerHTML = motorHtml(st);
+}
+async function motorAhora(){
+  refrescaMotor({ ...(await DESK.motorEstado()), corriendo: true });
+  const r = await DESK.motorAhora();
+  refrescaMotor(await DESK.motorEstado());
+  toast(r.ok ? "Datos actualizados: " + r.msg : "No se pudo: " + r.msg, r.ok ? "ok" : "err");
+  autoCheck();
+}
+async function motorToggle(v){ refrescaMotor(await DESK.motorActivo(v)); }
+if (DESK) DESK.onMotor(st => refrescaMotor(st));
+
 function openMenu(){
   const updated = state.meta ? new Date(state.meta.updatedAt).toLocaleString("es-ES") : "—";
   openModal(`
@@ -5357,6 +5427,7 @@ function openMenu(){
       ${("Notification" in window) ? (Notification.permission === "granted"
         ? `<div class="badge green" style="margin-bottom:12px">${IC.bell.replace('class="ic"','class="ic" style="width:12px;height:12px"')} Avisos de objetivos activados</div>`
         : `<button class="btn-ghost" style="width:100%;margin-bottom:9px" onclick="Notification.requestPermission().then(()=>{closeModal();openMenu()})">${IC.bell.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Activar avisos de objetivos</button>`) : ""}
+      ${DESK ? `<div class="card" id="motorCard" style="padding:13px 15px;margin-bottom:12px">${motorHtml(null)}</div>` : ""}
       <button class="btn-ghost" style="width:100%;margin-bottom:9px" onclick="closeModal();setView('liga')">${IC.user.replace('class="ic"','class="ic" style="width:14px;height:14px"')} ${state.auth ? "Mi Liga (cuenta conectada)" : "Enlazar mi cuenta del Fantasy"}</button>
       <details class="card" style="padding:0;margin-bottom:9px">
         <summary style="padding:12px 15px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-2);list-style:none">📬 Resumen diario por Telegram (configurar)</summary>
