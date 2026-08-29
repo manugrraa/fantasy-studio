@@ -1,0 +1,36 @@
+{
+  "name": "fantasy-studio-desktop",
+  "productName": "Fantasy Studio",
+  "version": "1.0.0",
+  "description": "Fantasy Studio para PC: la misma app, sin limitaciones del navegador y con los datos al dia",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "app": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.manugrraa.fantasystudio",
+    "productName": "Fantasy Studio",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "win": {
+      "target": ["portable"],
+      "icon": "build/icon.png"
+    },
+    "portable": {
+      "artifactName": "Fantasy-Studio-${version}.exe"
+    }
+  }
+}

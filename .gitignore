@@ -1,3 +1,5 @@
 worker/.wrangler/
 node_modules/
 TRASPASO_CONVERSACION.md
+desktop/release/
+desktop/build/
