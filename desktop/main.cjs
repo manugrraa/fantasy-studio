@@ -442,6 +442,15 @@ if (process.env.FS_SELFTEST) {
       res.gitRama = git.out.trim();
       const remoto = await run("git", ["ls-remote", "--exit-code", "origin", "HEAD"]);
       res.gitCredenciales = remoto.code === 0 ? "ok" : "fallan";
+      // la red de seguridad debe cazar JSON roto y marcadores de conflicto
+      const cobaya = path.join(REPO, "data", "status_log_2.json");
+      const bueno = fs.readFileSync(cobaya, "utf8");
+      fs.writeFileSync(cobaya, "<<<<<<< Updated upstream\n{}\n>>>>>>> Stashed changes");
+      res.guardaConflicto = dataSana();
+      fs.writeFileSync(cobaya, "{ esto no es json");
+      res.guardaJsonRoto = dataSana();
+      fs.writeFileSync(cobaya, bueno);
+      res.guardaConDatosSanos = dataSana();
       if (process.env.FS_MOTOR_TEST) {
         res.motor = await actualizarDatos("prueba");
         res.motorLog = motor.log.map(l => l.txt);
