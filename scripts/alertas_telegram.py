@@ -240,20 +240,41 @@ def main():
             elif not reached and state["obj"].get(k):
                 del state["obj"][k]  # se rearma
 
-        # movimientos fuertes de mi plantilla (una vez al dia por jugador)
-        for e in (personal.get("squad") or {}).get(comp) or []:
-            pid = e.get("pid")
-            if not pid or e.get("custom"):
-                continue
-            r = val_d1(pid)
-            if not r:
-                continue
-            p, val, d1 = r
-            k = f"{comp}:{pid}"
-            if abs(d1) >= MOVE_THRESHOLD and state["moves"].get(k) != today:
-                state["moves"][k] = today
-                emoji = "🚀" if d1 > 0 else "⚠️"
-                alerts.append(f"{emoji} <b>{p['nickname']}</b> (tu plantilla) {sign(d1)} hoy → {fmt_m(val)}.")
+        # 💰 el parte del dia: cuando los valores de HOY quedan confirmados
+        # (data/values_day.json, lo escribe update_data), UNA vez al dia:
+        # balance total de mi plantilla con TODAS sus subidas y bajadas.
+        # Sustituye a los antiguos avisos sueltos de "movimiento fuerte".
+        vday = load("values_day.json", {})
+        dia = state.setdefault("dia", {})
+        if vday.get(comp) == today and dia.get(comp) != today:
+            ups, downs, total, known = [], [], 0, 0
+            for e in (personal.get("squad") or {}).get(comp) or []:
+                pid = e.get("pid")
+                if not pid or e.get("custom"):
+                    continue
+                r = val_d1(pid)
+                if not r:
+                    continue
+                p, val, d1 = r
+                known += 1
+                total += d1
+                if d1 > 0:
+                    ups.append((p, d1))
+                elif d1 < 0:
+                    downs.append((p, d1))
+            if known:
+                dia[comp] = today
+                ups.sort(key=lambda x: -x[1])
+                downs.sort(key=lambda x: x[1])
+                emoji = "🟢" if total > 0 else ("🔴" if total < 0 else "⚪")
+                bloque = [f"💰 <b>Precios del día</b> — tu plantilla: {emoji} <b>{sign(total) if total else 'sin cambios'}</b>"]
+                if ups:
+                    bloque.append("📈 " + " · ".join(f"{p['nickname']} {sign(d)}" for p, d in ups[:8])
+                                  + (f" y {len(ups) - 8} más" if len(ups) > 8 else ""))
+                if downs:
+                    bloque.append("📉 " + " · ".join(f"{p['nickname']} {sign(d)}" for p, d in downs[:8])
+                                  + (f" y {len(downs) - 8} más" if len(downs) > 8 else ""))
+                alerts.append("\n".join(bloque))
 
     if not alerts:
         save("alert_state.json", state)  # re-armes y limpieza aunque no haya avisos
@@ -262,6 +283,11 @@ def main():
 
     msg = "\n".join(["<b>⚡ Fantasy Studio — alerta</b>"] + alerts +
                     ['<a href="https://manugrraa.github.io/fantasy-studio/">Abrir la app</a>'])
+    if token.lower() == "dry":
+        # modo prueba: imprime el mensaje y NO toca el estado (el envio real
+        # de ese dia sigue pendiente para el workflow)
+        sys.stdout.buffer.write(("(dry) mensaje que se enviaria:\n\n" + msg).encode("utf-8", "replace"))
+        return
     body = urllib.parse.urlencode({
         "chat_id": chat, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": "true",
     }).encode()

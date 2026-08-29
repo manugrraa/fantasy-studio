@@ -154,14 +154,23 @@ def personal_section(personal):
     squad = (personal.get("squad") or {}).get(comp) or []
     watch = (personal.get("watch") or {}).get(comp) or []
 
-    sq_lines = []
+    # plantilla: subidas y bajadas POR SEPARADO y el balance total del dia
+    sq_up, sq_down, sq_total, sq_known = [], [], 0, 0
     for e in squad:
         if e.get("custom") or not e.get("pid"):
             continue
         r = player_delta(comp, e["pid"], by_id, hist)
-        if r and r[1]:
-            p, d1, _ = r
-            sq_lines.append(f"{p['nickname']} {sign(d1)}")
+        if not r:
+            continue
+        p, d1, _ = r
+        sq_known += 1
+        sq_total += d1
+        if d1 > 0:
+            sq_up.append((p, d1))
+        elif d1 < 0:
+            sq_down.append((p, d1))
+    sq_up.sort(key=lambda x: -x[1])
+    sq_down.sort(key=lambda x: x[1])
     w_lines = []
     hits = []
     for w in watch:
@@ -178,13 +187,21 @@ def personal_section(personal):
             if reached:
                 hits.append(f"{p['nickname']} ({fmt_m(val)})")
 
-    if money is not None or sq_lines or w_lines or hits:
+    if money is not None or sq_known or w_lines or hits:
         out.append("")
         out.append("<b>⭐ Lo tuyo</b>" + (f" · dinero: <b>{fmt_m(money)}</b>" if money is not None else ""))
         if hits:
             out.append("🎯 <b>Objetivo alcanzado:</b> " + " · ".join(hits))
-        if sq_lines:
-            out.append("👥 <b>Tu plantilla:</b> " + " · ".join(sq_lines[:10]))
+        if sq_known:
+            balance = "sin cambios" if sq_total == 0 else f"<b>{sign(sq_total)}</b>"
+            emoji = "🟢" if sq_total > 0 else ("🔴" if sq_total < 0 else "⚪")
+            out.append(f"👥 <b>Tu plantilla hoy:</b> {emoji} {balance}")
+            if sq_up:
+                out.append("   📈 " + " · ".join(f"{p['nickname']} {sign(d)}" for p, d in sq_up[:8])
+                           + (f" +{len(sq_up) - 8} más" if len(sq_up) > 8 else ""))
+            if sq_down:
+                out.append("   📉 " + " · ".join(f"{p['nickname']} {sign(d)}" for p, d in sq_down[:8])
+                           + (f" +{len(sq_down) - 8} más" if len(sq_down) > 8 else ""))
         if w_lines:
             out.append("👁 <b>Tus vigilados:</b> " + " · ".join(w_lines[:10]))
     return out
