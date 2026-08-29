@@ -3730,6 +3730,13 @@ async function loadLiga(force){
   // el historial se mantiene al día en segundo plano: así tus compras/ventas
   // reales entran solas en Mi Plantilla y Movimientos con precio y fecha exactos
   if (state.auth && !state.actFull[c]?.done) loadFullActivity(c);
+  // con el historial ya en memoria (sesión que sobrevive de antes), la cadena
+  // de loadFullActivity no vuelve a correr: reconciliar aquí, en CADA refresco,
+  // con el equipo real recién bajado — si no, una venta hecha fuera podía
+  // quedarse en Mi Plantilla para siempre
+  else if (state.auth && state.actFull[c]?.done) {
+    syncRealMoves(true).then(() => { syncDraftPlayers(c); reconcileSquad(c); });
+  }
   if (state.view === "liga") render();
 }
 

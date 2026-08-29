@@ -12,6 +12,10 @@ on:
     - cron: "10,40 23 * * *"
     - cron: "10,40 0 * * *"
   workflow_dispatch:
+  # disparador TEMPORAL: prueba del parte con la nube ya limpia (se quita después)
+  push:
+    paths:
+      - ".github/workflows/datos.yml"
 
 permissions:
   contents: write
