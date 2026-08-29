@@ -322,6 +322,9 @@ function createWindow(){
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true, nodeIntegration: false,
+      // con la ventana oculta en la bandeja, Chromium ralentiza los timers;
+      // las pujas programadas necesitan el reloj exacto
+      backgroundThrottling: false,
     },
   });
   mainWindow.loadURL(`http://${HOST}:${PORT}/`);
