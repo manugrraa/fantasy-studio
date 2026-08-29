@@ -23,7 +23,11 @@ const API_HOST = "https://fantasy-api.llt-services.com";
 const DEFAULT_REPO = "E:\\A RdeRandom\\Webs\\Fantasy Studio";
 
 app.setAppUserModelId("com.manugrraa.fantasystudio");
-if (!app.requestSingleInstanceLock()) app.quit();
+// Solo una instancia: si ya hay un Fantasy Studio (aunque sea en la bandeja),
+// esta se va YA y aquella se trae al frente (evento second-instance de abajo).
+// app.quit() no basta: es asíncrono y el arranque seguía hasta chocar con el
+// puerto ocupado y enseñar un error que no tocaba.
+if (!app.requestSingleInstanceLock()) app.exit(0);
 
 let mainWindow = null;
 let tray = null;
@@ -372,8 +376,10 @@ app.whenReady().then(async () => {
   try {
     await startServer();
   } catch(e) {
-    dialog.showErrorBox("Fantasy Studio", `No he podido abrir el servidor local en el puerto ${PORT}.\n\n${e.message}`);
-    app.quit(); return;
+    dialog.showErrorBox("Fantasy Studio", e.code === "EADDRINUSE"
+      ? "Ya hay un Fantasy Studio abierto en este equipo (mira el icono de la bandeja, junto al reloj). Ciérralo con clic derecho → Salir y vuelve a abrir este."
+      : `No he podido abrir el servidor local en el puerto ${PORT}.\n\n${e.message}`);
+    app.exit(1); return;
   }
   createTray();
   createWindow();
@@ -431,6 +437,8 @@ if (process.env.FS_SELFTEST) {
             sePasaElPasoDelPuente: sinPuente,
             botonLoginNativo: typeof socialDesktop === "function",
             panelMotor: typeof motorHtml === "function",
+            pujasProgramadas: typeof runSchedBids === "function" && typeof cancelSchedBid === "function",
+            plantillasCongeladas: typeof squadAtWeekStart === "function",
           };
         })()`);
       }
