@@ -5162,6 +5162,28 @@ async function loadRivalLineups(c){
   if (state.view === "liga") render();
 }
 
+/* Puntos de jornadas CERRADAS por equipo, sacados de los premios reales del
+   historial (el juego paga 100.000 € por punto al cerrar cada jornada). La
+   puntuación de la clasificación de la API no vale para esto: en ligas que
+   arrancan a mitad de temporada arrastra jornadas que la liga no jugó. Liga
+   sin premios todavía (recién creada) => todos a 0, que es lo correcto. */
+function closedWeekPoints(c){
+  const act = state.actFull[c];
+  if (!act?.done) return null;
+  const open = state.meta?.comps?.[c]?.openingWeekDate ? new Date(state.meta.comps[c].openingWeekDate).getTime() : null;
+  const maps = managerMaps(c);
+  const out = {};
+  for (const raw of act.items) {
+    const a = parseAct(raw);
+    if (a.type !== 6 || a.money == null) continue;
+    // el premio de la jornada en vivo (si ya cayó) no entra: esa va aparte
+    if (open && a.date && new Date(a.date).getTime() >= open) continue;
+    const t = actTeam(a, maps, 1);
+    if (t != null) out[String(t)] = (out[String(t)] || 0) + Math.round(Math.abs(+a.money) / 100000);
+  }
+  return out;
+}
+
 function squadAtWeekStart(c, tid, curIds){
   const ids = new Set(curIds.map(String));
   const week = state.meta?.comps?.[c];
@@ -5238,6 +5260,8 @@ function ligaTabDirecto(c, d){
         <div class="card"><div class="empty-state" style="padding:20px">Cargando los equipos de tus rivales…</div></div>`;
     } else {
       const sel = state.myLeague[c];
+      // total = jornadas cerradas (premios reales) + la jornada en vivo
+      const prevMap = closedWeekPoints(c);
       const rows = B.rows.map(r => {
         let team = cache[r.tid];
         if (r.isMe && (!team || team.error)) team = d.team;
@@ -5256,7 +5280,8 @@ function ligaTabDirecto(c, d){
             .sort((a, b) => b - a).slice(0, 11);
           jpts = all.reduce((a, b) => a + b, 0);
         }
-        return { ...r, jpts: jpts ?? 0, total: r.points + (jpts ?? 0) };
+        const prev = prevMap ? (prevMap[r.tid] || 0) : r.points;
+        return { ...r, jpts: jpts ?? 0, prev, total: prev + (jpts ?? 0) };
       }).sort((a, b) => b.total - a.total);
       liveTable = `<div class="section-title">Clasificación en vivo${allXI ? "" : " (estimada)"}</div>
       <div class="card">${rows.map((r, i) => {
@@ -5343,12 +5368,14 @@ function openRivalLive(tid){
     ? xi.ids.reduce((a, x) => a + (weekPts(c, x.id, wn) || 0) * (x.cap ? 2 : 1), 0)
     : players.reduce((a, x) => a + (counted.has(x.pid) ? (x.pts || 0) : 0), 0);
   const scored = players.filter(x => x.pts != null).length;
+  const prevMap = closedWeekPoints(c);
+  const prev = prevMap ? (prevMap[String(tid)] || 0) : (r?.points || 0);
   openModal(`
     ${modalHead("🔴 " + title + (isMe ? " · YO" : ""))}
     <div class="modal-body">
       <div class="stat-grid" style="margin-bottom:12px">
         ${statTile("Puntos J" + wn, `<span style="color:var(--acc)">${jpts}</span>`, xi ? "con su once real" : scored + "/" + players.length + " han puntuado")}
-        ${statTile("Total en vivo", nfES.format((r?.points || 0) + jpts), nfES.format(r?.points || 0) + " + J" + wn)}
+        ${statTile("Total en vivo", nfES.format(prev + jpts), nfES.format(prev) + " + J" + wn)}
       </div>
       <div class="card">${players.map(x => {
         const badge = counted.has(x.pid)
