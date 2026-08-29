@@ -700,6 +700,7 @@ const state = {
   ligaTab: "mercado",   // pestaña activa dentro de Mi Liga
   actFull: {},          // comp -> {items:[...], done:bool, loading:bool} historial completo de actividad
   rivalTeams: {},       // comp -> {teamId: teamData} caché de equipos rivales
+  rivalLineups: {},     // comp -> {wn, byTid: {teamId: {ids:[{id,cap}]}}, done, error} onces reales de la jornada
   rivalOpen: null,      // teamId del rival desplegado
 };
 
@@ -3596,42 +3597,6 @@ async function loadLiga(force){
 
     await step("standing", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/standing?x-lang=es`)));
 
-    // Puntos de jornada OFICIALES (los de la clasificación por jornada de la
-    // app de LaLiga): con ellos el Directo no tiene que estimar nada. La ruta
-    // exacta no está documentada: se prueban dos variantes y se recuerda la
-    // que funcione; si ninguna, el Directo sigue con su estimación.
-    const wnSW = state.meta?.comps?.[c]?.weekNumber;
-    if (wnSW) await step("standingWeek", async () => {
-      const key = "fs_swpath_" + c;
-      const paths = [
-        `/api/v1/competition/${c}/leagues/${sel.leagueId}/standing/${wnSW}?x-lang=es`,
-        `/api/v1/competition/${c}/leagues/${sel.leagueId}/standing?weekNumber=${wnSW}&x-lang=es`,
-      ];
-      const start = +localStorage.getItem(key) || 0;
-      let lastErr = null;
-      for (let i = 0; i < paths.length; i++) {
-        const idx = (start + i) % paths.length;
-        try {
-          const rows = unwrapList(await authFetch(paths[idx]));
-          if (!rows.length) continue;
-          // guarda: si lo devuelto es un calco de la clasificación general
-          // (misma puntuación por equipo), no es la vista por jornada
-          const gen = new Map((out.standing || []).map(r => {
-            const t = r.team || r; return [String(t.id ?? r.teamId ?? ""), +(r.points ?? r.teamPoints ?? 0)];
-          }));
-          const same = rows.every(r => {
-            const t = r.team || r;
-            return gen.get(String(t.id ?? r.teamId ?? "")) === +(r.points ?? r.weekPoints ?? t.points ?? 0);
-          });
-          if (same && gen.size > 1 && [...gen.values()].some(v => v > 0)) continue;
-          localStorage.setItem(key, String(idx));
-          return rows;
-        } catch(e) { lastErr = e; }
-      }
-      if (lastErr) throw lastErr;
-      return [];
-    });
-
     // si la liga no traía mi teamId, lo buscamos en la clasificación por el manager
     if (!sel.teamId && out.standing && out.me) {
       const meId = out.me.id ?? out.me.userId ?? null;
@@ -5128,15 +5093,73 @@ function weekPts(c, pid, week){
    los fichados con la jornada en marcha no cuentan y los vendidos siguen contando.
    Se parte de la plantilla actual y se deshacen, de hoy hacia atrás, las
    operaciones del historial posteriores al arranque. */
-/* teamId -> puntos de jornada oficiales (de la clasificación por jornada de la
-   API), o null si esa llamada no funcionó y toca estimar */
-function standingWeekMap(c, d){
-  const rows = unwrapList((d || state.liga.data[c] || {}).standingWeek || []);
-  if (!rows.length) return null;
-  return new Map(rows.map(x => {
-    const t = x.team || x;
-    return [String(t.id ?? x.teamId ?? ""), +(x.points ?? x.weekPoints ?? t.points ?? 0)];
-  }));
+/* ---------- onces REALES de la jornada ----------
+   La app oficial enseña las alineaciones rivales en cuanto arranca la jornada,
+   así que la API las tiene. La ruta exacta no está documentada: se prueban
+   variantes con el primer equipo, se recuerda la buena (fs_lineuppath) y con
+   ella se leen todos. Si ninguna funciona, el Directo sigue estimando. */
+function lineupIds(raw){
+  // saca los jugadores alineados de la respuesta, sea cual sea su envoltorio
+  const seen = new Set(), out = [];
+  const walk = (o, depth) => {
+    if (!o || depth > 6) return;
+    if (Array.isArray(o)) { for (const x of o) walk(x, depth + 1); return; }
+    if (typeof o !== "object") return;
+    const pm = (o.playerMaster && typeof o.playerMaster === "object") ? o.playerMaster
+             : (o.player && typeof o.player === "object") ? o.player : null;
+    const id = (pm ? pm.id : null) ?? o.playerMasterId ?? o.playerId ?? null;
+    if (id != null) {
+      if (!seen.has(String(id))) { seen.add(String(id)); out.push({ id: String(id), cap: !!(o.isCaptain || o.captain) }); }
+      return;
+    }
+    for (const k in o) walk(o[k], depth + 1);
+  };
+  walk(raw, 0);
+  // un once son 11 (o menos si el mánager alineó incompleto); más = esto no era la alineación
+  return out.length >= 7 && out.length <= 11 ? out : null;
+}
+
+async function loadRivalLineups(c){
+  const d = state.liga.data[c];
+  const sel = state.myLeague[c];
+  const wn = state.meta?.comps?.[c]?.weekNumber;
+  if (!d?.standing || !sel || !wn || !state.auth) return;
+  const st = state.rivalLineups[c] || (state.rivalLineups[c] = {});
+  if (st.wn !== wn) { st.wn = wn; st.byTid = {}; st.done = false; st.loading = false; st.error = null; }
+  if (st.done || st.loading) return;
+  st.loading = true;
+  const PATHS = [
+    tid => `/api/v1/competition/${c}/teams/${tid}/lineup/week/${wn}?x-lang=es`,
+    tid => `/api/v1/teams/${tid}/lineup/week/${wn}?x-lang=es`,
+    tid => `/api/v1/competition/${c}/leagues/${sel.leagueId}/teams/${tid}/lineup/week/${wn}?x-lang=es`,
+  ];
+  const key = "fs_lineuppath_" + c;
+  let good = localStorage.getItem(key) == null ? -1 : +localStorage.getItem(key);
+  let lastErr = null;
+  for (const r of d.standing) {
+    const tid = String((r.team || r).id ?? "");
+    if (!tid || st.byTid[tid]) continue;
+    const order = good >= 0 ? [good] : PATHS.map((_, i) => i);
+    let leido = false;
+    for (const i of order) {
+      try {
+        const ids = lineupIds(await authFetch(PATHS[i](tid)));
+        if (ids) {
+          st.byTid[tid] = { ids };
+          if (good < 0) { good = i; localStorage.setItem(key, String(i)); }
+          leido = true;
+          break;
+        }
+        lastErr = "la respuesta no parece una alineación";
+      } catch(e) { lastErr = `HTTP ${e.status || "?"} (${e.message})`; }
+    }
+    // si con el primer equipo no funcionó ninguna ruta, no insistir con el resto
+    if (!leido && good < 0) break;
+  }
+  if (!Object.keys(st.byTid).length) st.error = lastErr || "sin respuesta";
+  st.loading = false;
+  st.done = true;
+  if (state.view === "liga") render();
 }
 
 function squadAtWeekStart(c, tid, curIds){
@@ -5196,16 +5219,21 @@ function ligaTabDirecto(c, d){
   if (!act || (!act.done && !act.loading)) setTimeout(() => loadFullActivity(c), 30);
   const B = computeBudgets(c);
   const cache = state.rivalTeams[c] || {};
-  // puntos de jornada oficiales, si la API los dio
-  const weekMap = standingWeekMap(c, d);
+  // onces reales de la jornada, si la API los dio
+  const lus = state.rivalLineups[c];
+  if (!lus || lus.wn !== wn || (!lus.done && !lus.loading)) setTimeout(() => loadRivalLineups(c), 30);
+  const xiDe = tid => (lus?.wn === wn && lus.byTid) ? lus.byTid[String(tid)] : null;
+  const teamsTotal = (d.standing || []).length;
+  const withXI = (lus?.wn === wn && lus.byTid) ? Object.keys(lus.byTid).length : 0;
+  const allXI = teamsTotal > 0 && withXI >= teamsTotal;
   let liveTable = "";
   if (!B) {
-    liveTable = `<div class="section-title">Clasificación en vivo${weekMap ? "" : " (estimada)"}</div>
+    liveTable = `<div class="section-title">Clasificación en vivo${allXI ? "" : " (estimada)"}</div>
       <div class="card"><div class="empty-state" style="padding:20px">Preparando la clasificación de tu liga…</div></div>`;
   }
   if (B) {
     if (!cache._all) setTimeout(() => loadAllRivalTeams(c), 30);
-    if (!weekMap && !cache._all) {
+    if (!allXI && !cache._all) {
       liveTable = `<div class="section-title">Clasificación en vivo (estimada)</div>
         <div class="card"><div class="empty-state" style="padding:20px">Cargando los equipos de tus rivales…</div></div>`;
     } else {
@@ -5214,8 +5242,10 @@ function ligaTabDirecto(c, d){
         let team = cache[r.tid];
         if (r.isMe && (!team || team.error)) team = d.team;
         let jpts = null;
-        if (weekMap && weekMap.has(r.tid)) {
-          jpts = weekMap.get(r.tid); // el dato oficial manda
+        const xi = xiDe(r.tid);
+        if (xi) {
+          // el once que alineó de verdad, jugador a jugador (capitán x2 si el juego lo marca)
+          jpts = xi.ids.reduce((a, x) => a + (weekPts(c, x.id, wn) || 0) * (x.cap ? 2 : 1), 0);
         } else if (r.isMe && lu?.ids?.length) {
           jpts = lu.ids.reduce((a, pid) => a + (weekPts(c, pid, wn) || 0), 0);
         } else if (team && !team.error) {
@@ -5228,7 +5258,7 @@ function ligaTabDirecto(c, d){
         }
         return { ...r, jpts: jpts ?? 0, total: r.points + (jpts ?? 0) };
       }).sort((a, b) => b.total - a.total);
-      liveTable = `<div class="section-title">Clasificación en vivo${weekMap ? "" : " (estimada)"}</div>
+      liveTable = `<div class="section-title">Clasificación en vivo${allXI ? "" : " (estimada)"}</div>
       <div class="card">${rows.map((r, i) => {
         const moved = r.pos - (i + 1);
         return `<div class="p-row" onclick="openRivalLive('${r.tid}')">
@@ -5240,9 +5270,11 @@ function ligaTabDirecto(c, d){
         </div>`;
       }).join("")}</div>
       <div style="font-size:10.5px;color:var(--text-3);margin-top:8px;padding:0 4px">
-        ${weekMap
-          ? `Puntos de la J${wn} <b>oficiales de tu liga</b>, los mismos que enseña la app de LaLiga. Toca un equipo para ver sus jugadores y puntos. Entran solos cada ~15 min.`
-          : `Estimación con las 11 mejores puntuaciones de la <b>plantilla que tenía cada equipo al arrancar la J${wn}</b>: los fichajes hechos con la jornada en marcha no suman y los vendidos siguen sumando, como en el juego (los onces reales de los rivales no son visibles). Toca un equipo para ver sus jugadores y puntos. Los datos entran solos cada ~15 min.`}
+        ${allXI
+          ? `Con los <b>onces reales</b> que alineó cada equipo en la J${wn}, leídos de tu liga. Toca un equipo para ver sus jugadores y puntos. Entran solos cada ~15 min.`
+          : withXI > 0
+          ? `Onces reales leídos para ${withXI} de ${teamsTotal} equipos; el resto va estimado con las 11 mejores puntuaciones de su plantilla del arranque de la J${wn}. Entran solos cada ~15 min.`
+          : `Estimación con las 11 mejores puntuaciones de la <b>plantilla que tenía cada equipo al arrancar la J${wn}</b>: los fichajes hechos con la jornada en marcha no suman y los vendidos siguen sumando, como en el juego.${lus?.error ? ` <b>No se pudieron leer los onces reales</b> (${esc(lus.error)}).` : ""} Los datos entran solos cada ~15 min.`}
       </div>`;
     }
   }
@@ -5292,27 +5324,35 @@ function openRivalLive(tid){
     if (p) players.push({ pm: p, pid, pts: weekPts(c, pid, wn), enJornada: true, vendido: true });
   }
   players.sort((a, b) => (b.pts ?? -99) - (a.pts ?? -99));
-  // qué puntuaciones cuentan: mi once real si existe; para rivales, las 11 mejores
-  // de la plantilla del arranque de la jornada
-  const counted = luIds
+  // qué puntuaciones cuentan: el once REAL leído de la liga si lo hay; si no,
+  // mi once local (para mí) o las 11 mejores de la plantilla del arranque
+  const xi = (state.rivalLineups[c]?.wn === wn && state.rivalLineups[c].byTid) ? state.rivalLineups[c].byTid[String(tid)] : null;
+  if (xi) for (const x of xi.ids) {
+    // por si alineó a alguien que ya ni está en su plantilla ni en la congelada
+    if (!players.some(y => y.pid === x.id)) {
+      const p = state.byId[c].get(x.id);
+      if (p) players.push({ pm: p, pid: x.id, pts: weekPts(c, x.id, wn), enJornada: true, vendido: true });
+    }
+  }
+  const counted = xi
+    ? new Set(xi.ids.map(x => x.id))
+    : luIds
     ? new Set(players.filter(x => luIds.has(x.pid)).map(x => x.pid))
     : new Set(players.filter(x => x.pts != null && x.enJornada).slice(0, 11).map(x => x.pid));
-  const jptsEst = players.reduce((a, x) => a + (counted.has(x.pid) ? (x.pts || 0) : 0), 0);
+  const jpts = xi
+    ? xi.ids.reduce((a, x) => a + (weekPts(c, x.id, wn) || 0) * (x.cap ? 2 : 1), 0)
+    : players.reduce((a, x) => a + (counted.has(x.pid) ? (x.pts || 0) : 0), 0);
   const scored = players.filter(x => x.pts != null).length;
-  // si la API dio los puntos oficiales de la jornada, mandan sobre la estimación
-  const wm = standingWeekMap(c, d);
-  const oficial = wm && wm.has(String(tid)) ? wm.get(String(tid)) : null;
-  const jpts = oficial ?? jptsEst;
   openModal(`
     ${modalHead("🔴 " + title + (isMe ? " · YO" : ""))}
     <div class="modal-body">
       <div class="stat-grid" style="margin-bottom:12px">
-        ${statTile("Puntos J" + wn, `<span style="color:var(--acc)">${jpts}</span>`, oficial != null ? "oficiales de tu liga" : scored + "/" + players.length + " han puntuado")}
+        ${statTile("Puntos J" + wn, `<span style="color:var(--acc)">${jpts}</span>`, xi ? "con su once real" : scored + "/" + players.length + " han puntuado")}
         ${statTile("Total en vivo", nfES.format((r?.points || 0) + jpts), nfES.format(r?.points || 0) + " + J" + wn)}
       </div>
       <div class="card">${players.map(x => {
         const badge = counted.has(x.pid)
-          ? `<span class="badge acc" style="padding:1px 6px;font-size:9px">${luIds ? "ONCE" : "CUENTA"}</span>${x.vendido ? ` <span style="color:var(--text-3);font-size:10px">vendido, sigue contando</span>` : ""}`
+          ? `<span class="badge acc" style="padding:1px 6px;font-size:9px">${(xi || luIds) ? "ONCE" : "CUENTA"}${xi?.ids.find(y => y.id === x.pid)?.cap ? " · C ×2" : ""}</span>${x.vendido ? ` <span style="color:var(--text-3);font-size:10px">vendido, sigue contando</span>` : ""}`
           : `<span style="color:var(--text-3)">${!x.enJornada ? "fichado en jornada · no cuenta" : x.pts == null ? "sin puntuar" : "no cuenta"}</span>`;
         return ligaPlayerRow(x.pm, `<div class="p-right">
           <div class="p-val ${x.pts != null ? (x.pts >= 5 ? "up" : x.pts < 0 ? "down" : "") : ""}">${x.pts != null ? x.pts + " pts" : "—"}</div>
@@ -5320,7 +5360,7 @@ function openRivalLive(tid){
         </div>`);
       }).join("")}</div>
       <div style="font-size:10.5px;color:var(--text-3);margin-top:8px">
-        ${oficial != null ? "Los puntos de arriba son los <b>oficiales de tu liga</b>; el reparto por jugador de abajo es orientativo (su once real no es visible)." : luIds ? "Cuentan los 11 de tu once." : "El once real del rival no es visible: cuentan las 11 mejores puntuaciones de la plantilla que tenía al arrancar la J" + wn + " — los fichajes de después no suman y los vendidos siguen sumando, como en el juego."}
+        ${xi ? "Cuentan los 11 de su <b>once real</b> en la J" + wn + ", leído de tu liga." : luIds ? "Cuentan los 11 de tu once." : "El once real del rival no se pudo leer: cuentan las 11 mejores puntuaciones de la plantilla que tenía al arrancar la J" + wn + " — los fichajes de después no suman y los vendidos siguen sumando, como en el juego."}
         ${week.isLive ? " Los puntos entran solos cada ~15 min: puedes dejar la ficha abierta." : ""}
         Toca un jugador para abrir su ficha.
       </div>
