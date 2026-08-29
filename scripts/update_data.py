@@ -85,6 +85,83 @@ def date_to_int(iso):
     return int(iso[:10].replace("-", ""))
 
 
+def _prev_day_value(series, today):
+    for d, v in reversed(series or []):
+        if d < today:
+            return v
+    return None
+
+
+def refresh_values(comp, players, marker):
+    """Valores fiables del dia pese a la CDN.
+
+    CloudFront cachea la lista de jugadores hasta 8 h e IGNORA la query en la
+    clave de cache (comprobado: _ts nuevo -> "Hit" con Age de horas), asi que
+    un runner puede recibir los valores de AYER despues de la 01:00. Tres capas:
+
+    - Dia ya confirmado (data/values_day.json): los valores de la lista se
+      pisan con los del historico -> una cache vieja no puede revertirlos.
+    - La lista trae valores nuevos respecto a ayer -> dia confirmado.
+    - Madrugada (01-07 Madrid) con lista clavada a ayer: rescate profundo por
+      el endpoint market-value de CADA jugador (ruta propia -> cache propia,
+      casi siempre Miss) tomando el valor de hoy de ahi.
+    """
+    path = os.path.join(DATA, f"history_{comp}.json")
+    hist = load(path, {})
+    today = today_int()
+
+    if marker.get(str(comp)) == today:
+        fixed = 0
+        for p in players:
+            s = hist.get(str(p["id"]))
+            if s and s[-1][0] == today and int(p.get("marketValue") or 0) != s[-1][1]:
+                p["marketValue"] = s[-1][1]
+                fixed += 1
+        if fixed:
+            print(f"[comp {comp}] valores: dia ya confirmado, lista cacheada vieja ignorada ({fixed} valores protegidos)")
+        return
+
+    diff = same = 0
+    for p in players:
+        v = int(p.get("marketValue") or 0)
+        y = _prev_day_value(hist.get(str(p["id"])), today)
+        if not v or y is None:
+            continue
+        if v != y:
+            diff += 1
+        else:
+            same += 1
+    if diff >= max(10, (diff + same) // 20):
+        marker[str(comp)] = today
+        print(f"[comp {comp}] valores: lista fresca ({diff} cambios vs ayer) -> dia {today} confirmado")
+        return
+    if not (1 <= now_madrid().hour < 7):
+        print(f"[comp {comp}] valores: lista sin cambios ({diff} vs ayer) fuera de madrugada; se deja tal cual")
+        return
+
+    got = [0]
+    def one(p):
+        pid = str(p["id"])
+        try:
+            raw = get(f"/v1/competition/{comp}/player/{pid}/market-value?x-lang=es")
+            best = None
+            for e in raw:
+                if date_to_int(e["date"]) == today:
+                    best = int(e["marketValue"])
+            if best:
+                p["marketValue"] = best
+                got[0] += 1
+        except Exception:
+            pass
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(one, players))
+    if got[0] >= len(players) * 0.5:
+        marker[str(comp)] = today
+        print(f"[comp {comp}] valores: rescate profundo de madrugada OK ({got[0]}/{len(players)} con valor de hoy) -> dia confirmado")
+    else:
+        print(f"[comp {comp}] valores: rescate profundo insuficiente ({got[0]}/{len(players)}); se reintentara")
+
+
 def update_history(comp, players):
     """Mantiene data/history_{comp}.json = {pid: [[yyyymmdd, valor], ...]}."""
     path = os.path.join(DATA, f"history_{comp}.json")
@@ -256,8 +333,10 @@ def main():
     save(os.path.join(DATA, "teams.json"), teams)
     print(f"equipos: {len(teams)}")
 
+    values_marker = load(os.path.join(DATA, "values_day.json"), {})
     for comp in COMPS:
         players = get(f"/v1/competition/{comp}/players?x-lang=es")
+        refresh_values(comp, players, values_marker)
         save(os.path.join(DATA, f"players_{comp}.json"), players)
         print(f"[comp {comp}] jugadores: {len(players)}")
 
@@ -279,6 +358,7 @@ def main():
         update_stats(comp, players)
         update_status_log(comp, players)
 
+    save(os.path.join(DATA, "values_day.json"), values_marker)
     save(os.path.join(DATA, "meta.json"), meta)
     print("meta actualizada:", meta["updatedAt"])
 
