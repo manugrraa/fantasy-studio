@@ -776,8 +776,21 @@ function persist() {
   localStorage.setItem(LS.moves, JSON.stringify(state.moves));
   localStorage.setItem(LS.watch, JSON.stringify(state.watch));
   localStorage.setItem(LS.favs, JSON.stringify(state.favs));
+  localStorage.setItem("fs_gone_v1", JSON.stringify(state.gone));
   scheduleSync();
 }
+
+/* Lápidas de lo borrado a mano (favorito, vigilado, entrada custom, movimiento):
+   viajan con la nube para que la fusión entre aparatos no resucite lo que
+   quitaste en uno de ellos. Caducan a los 60 días. */
+state.gone = load("fs_gone_v1", {});
+for (const k of ["squad", "watch", "favs", "moves"]) state.gone[k] = state.gone[k] || {};
+(function purgaGone(){
+  const lim = Date.now() - 60 * 864e5;
+  for (const k of ["squad", "watch", "favs", "moves"])
+    for (const id in state.gone[k]) if (new Date(state.gone[k][id]).getTime() < lim) delete state.gone[k][id];
+})();
+function markGone(kind, key){ state.gone[kind][String(key)] = new Date().toISOString(); }
 
 /* ---------- nube personal: copia en TU Worker (KV) ----------
    Guarda plantilla/vigilados/favoritos/dinero bajo una clave secreta aleatoria.
@@ -807,6 +820,7 @@ async function pushSync(){
       wealth: load("fs_wealth_hist", {}), // para el resumen semanal de Telegram
       budgetHist: load("fs_budget_hist", {}), // caja de rivales, inmortal en la nube
       lineup: load("fs_lineup_v1", {}), // mi once inicial (también para la crónica)
+      gone: state.gone, // lápidas: lo borrado no debe resucitar en otro aparato
     };
     await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey(), {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -814,6 +828,84 @@ async function pushSync(){
     });
   } catch(e) { /* sin red: se reintenta en el próximo cambio */ }
 }
+/* Fusión AUTOMÁTICA y silenciosa con la nube: lo personal (vigilados,
+   favoritos, entradas custom, movimientos) se une entre aparatos — unión menos
+   lápidas, y en los vigilados gana la edición más reciente. Lo REAL (plantilla
+   de la liga, dinero) no viaja así: cada aparato lo reconstruye de la API, que
+   es la verdad. Corre al arrancar y en cada ciclo de autoCheck. */
+let _lastCloudAt = null;
+async function mergeCloud(){
+  if (!state.workerUrl) return;
+  try {
+    const r = await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey(), { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) return; // 404: aún no hay copia en la nube
+    const data = await r.json();
+    if (!data || !data.at || data.at === _lastCloudAt) return;
+    _lastCloudAt = data.at;
+    for (const k of ["squad", "watch", "favs", "moves"])
+      state.gone[k] = Object.assign({}, (data.gone || {})[k], state.gone[k]);
+    let changed = false;
+    for (const c of ["1", "2"]) {
+      // favoritos: unión menos lápidas
+      const favs = new Set((state.favs[c] || []).map(String));
+      for (const pid of (data.favs?.[c] || []).map(String)) if (!state.gone.favs[pid] && !favs.has(pid)) { favs.add(pid); changed = true; }
+      const favsLimpios = [...favs].filter(pid => !state.gone.favs[pid]);
+      if (favsLimpios.length !== (state.favs[c] || []).length) changed = true;
+      state.favs[c] = favsLimpios;
+      // vigilados: unión por jugador; si ambos lo tienen, gana el editado más reciente
+      const byPid = new Map((state.watch[c] || []).map(w => [String(w.pid), w]));
+      for (const w of (data.watch?.[c] || [])) {
+        const pid = String(w.pid);
+        if (state.gone.watch[pid]) continue;
+        const mine = byPid.get(pid);
+        if (!mine) { byPid.set(pid, w); changed = true; }
+        else if ((w.updatedAt || w.createdAt || "") > (mine.updatedAt || mine.createdAt || "")) { byPid.set(pid, w); changed = true; }
+      }
+      const watchLimpios = [...byPid.values()].filter(w => !state.gone.watch[String(w.pid)]);
+      if (watchLimpios.length !== (state.watch[c] || []).length) changed = true;
+      state.watch[c] = watchLimpios;
+      // plantilla: solo las entradas CUSTOM viajan (las reales las reconstruye
+      // cada aparato contra la liga); unión por id menos lápidas
+      const ids = new Set((state.squad[c] || []).map(e => e.id));
+      for (const e of (data.squad?.[c] || [])) {
+        if (!e.custom || ids.has(e.id) || state.gone.squad[e.id]) continue;
+        state.squad[c].push(e); changed = true;
+      }
+      const antesN = state.squad[c].length;
+      state.squad[c] = state.squad[c].filter(e => !(e.custom && state.gone.squad[e.id]));
+      if (state.squad[c].length !== antesN) changed = true;
+      // movimientos: unión (reales por actId, manuales por id) menos lápidas
+      const actIds = new Set((state.moves[c] || []).map(m => m.actId).filter(Boolean));
+      const mIds = new Set((state.moves[c] || []).map(m => m.id));
+      for (const m of (data.moves?.[c] || [])) {
+        if (state.gone.moves[m.id]) continue;
+        if (m.actId ? actIds.has(m.actId) : mIds.has(m.id)) continue;
+        state.moves[c].push(m); changed = true;
+      }
+      const antesM = state.moves[c].length;
+      state.moves[c] = state.moves[c].filter(m => !state.gone.moves[m.id]);
+      if (state.moves[c].length !== antesM) changed = true;
+    }
+    if (changed) { persist(); render(); }
+    else localStorage.setItem("fs_gone_v1", JSON.stringify(state.gone));
+  } catch(e) { /* sin red: se reintenta en el próximo ciclo */ }
+}
+
+/* Enlazar este aparato con la nube de otro: adopta su clave, fusiona lo que
+   haya allí y a partir de ahí los dos escriben en la misma copia. */
+async function adoptSyncKey(){
+  const inp = document.getElementById("syncKeyIn");
+  const k = (inp?.value || "").trim();
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(k)) { toast("Esa clave no tiene buena pinta (cópiala entera del otro aparato)", "err"); return; }
+  if (k === syncKey()) { toast("Ya estás usando esa clave", "ok"); return; }
+  localStorage.setItem("fs_sync_key", k);
+  _lastCloudAt = null;
+  await mergeCloud();
+  scheduleSync();
+  closeModal();
+  toast("Aparatos enlazados: la nube ahora es la misma", "ok");
+}
+
 async function pullSync(){
   if (!state.workerUrl) { toast("Falta el servidor puente", "err"); return; }
   try {
@@ -840,7 +932,7 @@ function toggleFav(pid){
   pid = String(pid);
   const list = state.favs[comp()] || (state.favs[comp()] = []);
   const i = list.indexOf(pid);
-  if (i >= 0) { list.splice(i, 1); toast("Quitado de favoritos"); }
+  if (i >= 0) { list.splice(i, 1); markGone("favs", pid); toast("Quitado de favoritos"); }
   else { list.push(pid); toast("⭐ Añadido a favoritos", "ok"); }
   persist();
   vibrate(10);
@@ -2816,8 +2908,8 @@ function openWatchModal(pid){
         const dir = ov.querySelector("#wDir").value;
         const list = state.watch[c];
         const entry = watchEntry(pid);
-        if (entry) { entry.target = target; entry.dir = target ? dir : null; entry.notifiedAt = null; }
-        else list.push({ pid: String(pid), target, dir: target ? dir : null, createdAt: todayISO(), notifiedAt: null });
+        if (entry) { entry.target = target; entry.dir = target ? dir : null; entry.notifiedAt = null; entry.updatedAt = new Date().toISOString(); }
+        else list.push({ pid: String(pid), target, dir: target ? dir : null, createdAt: todayISO(), updatedAt: new Date().toISOString(), notifiedAt: null });
         persist(); vibrate(10); closeModal();
         toast(target ? "Objetivo guardado: " + fmtM(target) + " €" : "Añadido a vigilados", "ok");
         render();
@@ -2825,6 +2917,7 @@ function openWatchModal(pid){
       });
       const del = ov.querySelector("#wDel");
       if (del) del.addEventListener("click", () => {
+        markGone("watch", pid);
         state.watch[c] = state.watch[c].filter(x => String(x.pid) !== String(pid));
         persist(); closeModal(); toast("Quitado de vigilados"); render();
       });
@@ -2964,6 +3057,7 @@ function openSell(entryId){
         if (!price) { toast("Pon el precio de venta", "err"); return; }
         const date = ov.querySelector("#sellDate").value || todayISO();
         const profit = price - (entry.buyPrice || 0);
+        markGone("squad", entry.id);
         state.squad[c] = state.squad[c].filter(e => e.id !== entry.id);
         state.moves[c].push({ id: uid(), type:"sell", pid:entry.pid, name:entry.name, pos:entry.pos, price, date, buyPrice: entry.buyPrice, profit });
         persist();
@@ -2999,6 +3093,8 @@ function openEditEntry(entryId){
       });
       ov.querySelector("#eDel").addEventListener("click", () => {
         if (!confirm("¿Quitar a " + entry.name + " de la plantilla? El movimiento de compra también se borrará. Úsalo solo para corregir errores; si lo has vendido, usa Vender.")) return;
+        markGone("squad", entry.id);
+        for (const m of state.moves[c]) if (m.linkedEntry === entry.id) markGone("moves", m.id);
         state.squad[c] = state.squad[c].filter(e => e.id !== entry.id);
         state.moves[c] = state.moves[c].filter(m => m.linkedEntry !== entry.id);
         persist(); closeModal(); toast("Quitado de la plantilla"); render();
@@ -3384,6 +3480,7 @@ function delMove(id){
     ? "\n\nOJO: su jugador sigue en Mi Plantilla; esto solo borra el registro."
     : "";
   if (!confirm("¿Borrar este movimiento de " + m.name + "?" + extra)) return;
+  markGone("moves", id);
   state.moves[c] = state.moves[c].filter(x => x.id !== id);
   persist(); render(); toast("Movimiento borrado");
 }
@@ -3716,8 +3813,9 @@ async function loadFullActivity(c, force){
   }
   st.loading = false;
   if (state.view === "liga") render();
-  // importa en silencio MIS operaciones nuevas (precio y fecha reales)
-  if (st.done) syncRealMoves(true).then(() => syncDraftPlayers(c));
+  // importa en silencio MIS operaciones nuevas (precio y fecha reales), asigna
+  // valor de origen a la plantilla inicial y CONTRASTA contra el equipo real
+  if (st.done) syncRealMoves(true).then(() => { syncDraftPlayers(c); reconcileSquad(c); });
 }
 
 /* Esquema REAL de la actividad (visto en LaLigaApp): activityTypeId
@@ -4225,6 +4323,52 @@ async function syncRealMoves(auto){
   render();
   vibrate(14);
   toast((auto ? "🔄 Tu liga trajo " + news.length + (news.length === 1 ? " operación: " : " operaciones: ") : news.length + " movimientos importados: ") + resumen.slice(0, 2).join(" · ") + (resumen.length > 2 ? " …" : ""), "ok");
+}
+
+/* La lista de MI equipo que devuelve la API es la verdad. Cualquier entrada
+   real de Mi Plantilla cuyo jugador ya no esté en el equipo se da por vendida
+   (la venta pasó fuera de esta app: p. ej. desde el móvil oficial) y se quita,
+   anotando la venta con el precio real del historial si aparece. Las entradas
+   custom (apuntes a mano) no se tocan. */
+function reconcileSquad(c){
+  const d = state.liga.data[c];
+  const act = state.actFull[c];
+  if (!state.auth || !d?.team || !act?.done) return;
+  const roster = new Set((d.team.players || d.team.playerTeams || [])
+    .map(x => String((x.playerMaster || x.player || x).id ?? "")).filter(Boolean));
+  if (!roster.size) return; // respuesta rara de la API: mejor no tocar nada
+  const myId = String(state.myLeague[c]?.teamId || "");
+  const maps = managerMaps(c);
+  const fuera = [];
+  for (const e of [...state.squad[c]]) {
+    if (e.custom || !e.pid || roster.has(String(e.pid))) continue;
+    // la venta real más reciente de ese jugador en el historial (va de nuevo a viejo)
+    let sale = null;
+    for (const raw of act.items) {
+      const a = parseAct(raw);
+      if (a.pid !== String(e.pid) || a.money == null) continue;
+      const vendiYo = (a.type === 33 && actTeam(a, maps, 1) === myId)
+        || ((a.type === 1 || a.type === 31 || a.type === 32) && actTeam(a, maps, 2) === myId);
+      if (vendiYo) { sale = a; break; }
+    }
+    // comprado HOY y sin venta registrada: puede ser que el equipo de la API
+    // aún no lo refleje (carrera de segundos) — se decide en el próximo ciclo
+    if (!sale && e.buyDate === todayISO()) continue;
+    const local = state.byId[c].get(String(e.pid));
+    const price = sale ? Math.abs(+sale.money) : (local ? pVal(local) : (e.buyPrice || 0));
+    const date = sale?.date ? String(sale.date).slice(0, 10) : todayISO();
+    const yaAnotada = sale && state.moves[c].some(m => m.actId === sale.id);
+    if (!yaAnotada) state.moves[c].push({ id: uid(), actId: sale ? sale.id : undefined, real: !!sale, estimado: !sale,
+      type: "sell", pid: String(e.pid), name: e.name, pos: e.pos, price, date,
+      buyPrice: e.buyPrice ?? null, profit: e.buyPrice != null ? price - e.buyPrice : null });
+    state.squad[c] = state.squad[c].filter(x => x.id !== e.id);
+    fuera.push(e.name);
+  }
+  if (fuera.length) {
+    persist();
+    render();
+    toast("🧹 Ya no están en tu equipo real (venta anotada): " + fuera.slice(0, 3).join(", ") + (fuera.length > 3 ? " +" + (fuera.length - 3) : ""), "ok");
+  }
 }
 
 /* plantilla inicial: los jugadores que vinieron CON el equipo (sin compra en el
@@ -5717,6 +5861,10 @@ function openMenu(){
           <button class="btn-ghost" style="width:100%;margin-bottom:8px" onclick="navigator.clipboard.writeText(syncKey()).then(()=>toast('Clave copiada','ok'))">Copiar clave</button>
           <button class="btn-ghost" style="width:100%;margin-bottom:8px" onclick="pullSync()">Restaurar en este dispositivo desde la nube</button>
           <button class="btn-ghost" style="width:100%;margin-bottom:10px" onclick="openBackupHistory()">🕐 Historial de copias (una por día, 60 días)</button>
+          <b>¿Usas la app en otro aparato?</b> Para que compartan la nube (vigilados, favoritos y
+          movimientos fusionados solos), copia la clave allí y pégala aquí:<br>
+          <div class="field" style="margin:8px 0"><input id="syncKeyIn" placeholder="clave del otro aparato" autocomplete="off"></div>
+          <button class="btn-ghost" style="width:100%;margin-bottom:10px" onclick="adoptSyncKey()">Enlazar con esa clave</button>
           Para que el <b>resumen de Telegram</b> incluya TUS vigilados, plantilla y dinero: pega la clave en
           <a href="https://github.com/manugrraa/fantasy-studio/settings/secrets/actions/new" target="_blank" rel="noopener" style="color:var(--acc)">este formulario</a>
           con Name <b>FANTASY_SYNC_KEY</b>. Un solo paso, una vez.
@@ -6086,8 +6234,10 @@ function updateBadge(){
     const live = state.meta?.comps?.[comp()]?.isLive;
     const mins = Math.floor(Date.now() / 60000);
     if (mins % (live ? 2 : 5) === 0) autoCheck();
+    if (mins % 5 === 0) mergeCloud(); // trae lo que hicieras en el otro aparato
   }, 60000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) autoCheck(); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { autoCheck(); mergeCloud(); } });
+  mergeCloud(); // al arrancar: fusiona lo personal con la nube compartida
   // Mi Liga: refresco periódico suave (loadLiga ya limita a 1 vez cada 2 min)
   setInterval(() => { if (state.view === "liga" && state.auth && !document.hidden) loadLiga(); }, 120000);
   // barra inferior: se oculta mientras el teclado está abierto para que no "flote"
