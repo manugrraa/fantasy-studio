@@ -815,12 +815,14 @@ async function firePrepBids(){
       await (myBid?.id
         ? authFetch(`/api/v1/competition/${c}/league/${L}/market/${b.marketId}/bid/${myBid.id}?x-lang=es`, { method:"PUT", body:{ money: b.amount } })
         : authFetch(`/api/v1/competition/${c}/league/${L}/market/${b.marketId}/bid?x-lang=es`, { method:"POST", body:{ money: b.amount } }));
-      b.status = "hecha";
-      b.statusAt = new Date().toISOString();
-      b.result = "enviada a las " + new Date().toLocaleTimeString("es-ES", { hour:"2-digit", minute:"2-digit" });
+      // la puja SE QUEDA en la cesta (se puede relanzar); solo se apunta el resultado.
+      // La cesta se vacía a mano o sola cuando ese mercado termina.
+      b.lastResult = "✔ enviada a las " + new Date().toLocaleTimeString("es-ES", { hour:"2-digit", minute:"2-digit" });
+      b.updatedAt = new Date().toISOString();
       ok++;
     } catch(e) {
-      b.status = "fallo"; b.statusAt = new Date().toISOString(); b.result = e.message;
+      b.lastResult = "✖ " + e.message;
+      b.updatedAt = new Date().toISOString();
       mal++;
     }
     persistPrep();
@@ -944,8 +946,7 @@ async function mergeCloud(){
         if (state.gone.prep[b.id]) continue;
         const mine = pbById.get(b.id);
         if (!mine) { pbById.set(b.id, b); prepChanged = true; }
-        else if ((mine.status === "preparada" && b.status !== "preparada")
-              || (mine.status === b.status && (b.statusAt || "") > (mine.statusAt || ""))) {
+        else if ((b.updatedAt || b.statusAt || b.createdAt || "") > (mine.updatedAt || mine.statusAt || mine.createdAt || "")) {
           pbById.set(b.id, b); prepChanged = true;
         }
       }
@@ -3836,6 +3837,17 @@ async function loadLiga(force){
   st.data[c] = out;
   st.errors = errs;
   st.loading = false;
+  // la cesta se limpia sola cuando el mercado rota: fuera lo que ya no está en venta
+  if (Array.isArray(out.market) && out.market.length) {
+    const vivos = new Set(out.market.map(x => String(x.id)));
+    const fuera = (state.prepBids[c] || []).filter(b => b.status === "preparada" && !vivos.has(String(b.marketId)));
+    if (fuera.length) {
+      for (const b of fuera) markGone("prep", b.id);
+      state.prepBids[c] = state.prepBids[c].filter(b => !fuera.includes(b));
+      persistPrep();
+      toast("🧺 Cesta al día: " + fuera.map(b => b.name).slice(0, 3).join(", ") + (fuera.length > 3 ? " +" + (fuera.length - 3) : "") + " ya no está" + (fuera.length === 1 ? "" : "n") + " en el mercado", "ok");
+    }
+  }
   snapshotWealth(c);
   scheduleSync(); // sube dinero/plantilla frescos a la nube personal
   // el historial se mantiene al día en segundo plano: así tus compras/ventas
@@ -4847,24 +4859,22 @@ function ligaTabPujas(c, d){
       <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();bidFromMarket(${idx})">Modificar / retirar</button>
     </div>`));
   });
-  // la cesta: preparadas siempre; lanzadas/fallidas, 24 h
-  const prep = (state.prepBids[c] || []).filter(b =>
-    b.status === "preparada" || Date.now() - new Date(b.statusAt || b.createdAt || 0).getTime() < 86400000);
-  const listosPrep = prep.filter(b => b.status === "preparada");
+  // la cesta: las pujas se quedan tras lanzarlas (con su último resultado al
+  // lado); se quitan a mano o solas cuando su mercado termina
+  const prep = (state.prepBids[c] || []).filter(b => b.status === "preparada");
+  const listosPrep = prep;
   const totalPrep = listosPrep.reduce((a, b) => a + b.amount, 0);
   const prepHtml = prep.length ? `
     <div class="section-title">🧺 Pujas preparadas</div>
     <div class="card" style="margin-bottom:10px">${prep.map(b => `
       <div class="p-row" style="cursor:default">
         <div class="p-main"><div class="p-name">${esc(b.name)}</div>
-          <div class="p-meta">${b.status === "preparada"
-            ? `en la cesta${b.expires ? " · su mercado cierra a las " + new Date(b.expires).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}`
-            : b.status === "hecha" ? `<span class="up">✔ ${esc(b.result || "enviada")}</span>` : `<span class="down">✖ ${esc(b.result || "falló")}</span>`}</div></div>
+          <div class="p-meta">en la cesta${b.lastResult ? ` · <span class="${b.lastResult.startsWith("✔") ? "up" : "down"}">${esc(b.lastResult)}</span>` : ""}${b.expires ? " · cierra a las " + new Date(b.expires).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}</div></div>
         <div class="p-right"><div class="p-val">${fmtM(b.amount)} €</div>
-          <button class="btn-ghost ${b.status === "preparada" ? "btn-danger" : ""}" style="padding:5px 10px;font-size:11px;margin-top:4px" onclick="cancelPrepBid('${esc(b.id)}')">${b.status === "preparada" ? "Quitar" : "Limpiar"}</button></div>
+          <button class="btn-ghost btn-danger" style="padding:5px 10px;font-size:11px;margin-top:4px" onclick="cancelPrepBid('${esc(b.id)}')">Quitar</button></div>
       </div>`).join("")}</div>
     ${listosPrep.length ? `<button class="btn-acc" id="prepGo" style="width:100%;margin-bottom:6px;padding:13px;font-size:14.5px" onclick="firePrepBids()">🚀 Hacer pujas (${listosPrep.length} · ${fmtM(totalPrep)} €)</button>
-    <div style="font-size:10.5px;color:var(--text-3);margin:0 4px 12px">Salen todas de golpe cuando TÚ pulses — hasta entonces nadie ve tu interés.</div>` : ""}` : "";
+    <div style="font-size:10.5px;color:var(--text-3);margin:0 4px 12px">Salen todas de golpe cuando TÚ pulses — y la cesta se queda como está, por si quieres relanzarlas. Se limpia sola cuando el mercado rota (o con «Quitar»).</div>` : ""}` : "";
   // pujas programadas: pendientes siempre; hechas/fallidas, 24 h
   const sched = (state.schedBids[c] || []).filter(b =>
     b.status === "pendiente" || Date.now() - new Date(b.when).getTime() < 86400000);
