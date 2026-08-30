@@ -772,6 +772,65 @@ async function runSchedBids(){
   }
 }
 setInterval(runSchedBids, 30000);
+/* ---------- pujas preparadas (la cesta) ----------
+   Las dejas listas con calma y un solo botón «Hacer pujas» las envía TODAS de
+   golpe en el momento que tú elijas: nadie ve tu interés hasta entonces.
+   Viajan por la nube igual que las programadas. */
+state.prepBids = load("fs_prepbids_v1", {});
+for (const c of ["1","2"]) state.prepBids[c] = state.prepBids[c] || [];
+function persistPrep(){
+  localStorage.setItem("fs_prepbids_v1", JSON.stringify(state.prepBids));
+  scheduleSync();
+}
+function cancelPrepBid(id){
+  for (const c of ["1","2"]) {
+    const b = state.prepBids[c].find(x => x.id === id);
+    if (b && b.status === "preparada" && !confirm(`¿Quitar la puja preparada por ${b.name}?`)) return;
+    if (b) markGone("prep", id);
+    state.prepBids[c] = state.prepBids[c].filter(x => x.id !== id);
+  }
+  persistPrep();
+  render();
+}
+async function firePrepBids(){
+  const c = comp();
+  const L = state.myLeague[c]?.leagueId;
+  if (!state.auth || !L) { toast("Inicia sesión en Mi Liga primero", "err"); return; }
+  const listos = state.prepBids[c].filter(b => b.status === "preparada");
+  if (!listos.length) { toast("No hay pujas preparadas", "err"); return; }
+  const total = listos.reduce((a, b) => a + b.amount, 0);
+  const money = ligaMoney(state.liga.data[c]?.money);
+  if (!confirm(`¿Enviar YA ${listos.length} ${listos.length === 1 ? "puja" : "pujas"} (total ${fmt(total)}) a tu liga REAL?`
+    + (money != null && total > money ? `\n\nOJO: el total supera tu dinero (${fmt(money)}); alguna puede ser rechazada.` : ""))) return;
+  const btn = document.getElementById("prepGo");
+  if (btn) { btn.disabled = true; btn.textContent = "Enviando…"; }
+  let ok = 0, mal = 0;
+  for (const b of listos) {
+    b.intentos = (b.intentos || 0) + 1;
+    try {
+      if (b.expires && new Date(b.expires).getTime() < Date.now()) throw new Error("su mercado ya había cerrado");
+      // si ya hay una puja mía sobre ese jugador, se modifica en vez de duplicar
+      const it = (state.liga.data[c]?.market || []).find(x => String(x.id) === String(b.marketId));
+      const myBid = it && (it.bid || it.myBid);
+      await (myBid?.id
+        ? authFetch(`/api/v1/competition/${c}/league/${L}/market/${b.marketId}/bid/${myBid.id}?x-lang=es`, { method:"PUT", body:{ money: b.amount } })
+        : authFetch(`/api/v1/competition/${c}/league/${L}/market/${b.marketId}/bid?x-lang=es`, { method:"POST", body:{ money: b.amount } }));
+      b.status = "hecha";
+      b.statusAt = new Date().toISOString();
+      b.result = "enviada a las " + new Date().toLocaleTimeString("es-ES", { hour:"2-digit", minute:"2-digit" });
+      ok++;
+    } catch(e) {
+      b.status = "fallo"; b.statusAt = new Date().toISOString(); b.result = e.message;
+      mal++;
+    }
+    persistPrep();
+  }
+  vibrate(20);
+  toast(`🚀 ${ok} ${ok === 1 ? "puja enviada" : "pujas enviadas"}${mal ? ` · ${mal} con fallo` : ""}`, mal ? "err" : "ok");
+  loadLiga(true);
+  render();
+}
+
 function cancelSchedBid(id){
   for (const c of ["1","2"]) {
     const b = state.schedBids[c].find(x => x.id === id);
@@ -798,10 +857,10 @@ function persist() {
    viajan con la nube para que la fusión entre aparatos no resucite lo que
    quitaste en uno de ellos. Caducan a los 60 días. */
 state.gone = load("fs_gone_v1", {});
-for (const k of ["squad", "watch", "favs", "moves", "sched"]) state.gone[k] = state.gone[k] || {};
+for (const k of ["squad", "watch", "favs", "moves", "sched", "prep"]) state.gone[k] = state.gone[k] || {};
 (function purgaGone(){
   const lim = Date.now() - 60 * 864e5;
-  for (const k of ["squad", "watch", "favs", "moves", "sched"])
+  for (const k of ["squad", "watch", "favs", "moves", "sched", "prep"])
     for (const id in state.gone[k]) if (new Date(state.gone[k][id]).getTime() < lim) delete state.gone[k][id];
 })();
 function markGone(kind, key){ state.gone[kind][String(key)] = new Date().toISOString(); }
@@ -836,6 +895,7 @@ async function pushSync(){
       lineup: load("fs_lineup_v1", {}), // mi once inicial (también para la crónica)
       gone: state.gone, // lápidas: lo borrado no debe resucitar en otro aparato
       schedBids: state.schedBids, // pujas programadas: el PC dispara lo del móvil
+      prepBids: state.prepBids, // la cesta: preparas donde sea, lanzas donde sea
     };
     await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey(), {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -857,10 +917,11 @@ async function mergeCloud(){
     const data = await r.json();
     if (!data || !data.at || data.at === _lastCloudAt) return;
     _lastCloudAt = data.at;
-    for (const k of ["squad", "watch", "favs", "moves", "sched"])
+    for (const k of ["squad", "watch", "favs", "moves", "sched", "prep"])
       state.gone[k] = Object.assign({}, (data.gone || {})[k], state.gone[k]);
     let changed = false;
     let schedChanged = false;
+    let prepChanged = false;
     for (const c of ["1", "2"]) {
       // pujas programadas: unión por id; un estado final (hecha/fallo) manda
       // sobre "pendiente", y a igualdad gana el cambio más reciente
@@ -877,6 +938,20 @@ async function mergeCloud(){
       const sbLimpias = [...sbById.values()].filter(b => !state.gone.sched[b.id]);
       if (sbLimpias.length !== (state.schedBids[c] || []).length) schedChanged = true;
       state.schedBids[c] = sbLimpias;
+      // pujas preparadas (la cesta): mismas reglas que las programadas
+      const pbById = new Map((state.prepBids[c] || []).map(b => [b.id, b]));
+      for (const b of (data.prepBids?.[c] || [])) {
+        if (state.gone.prep[b.id]) continue;
+        const mine = pbById.get(b.id);
+        if (!mine) { pbById.set(b.id, b); prepChanged = true; }
+        else if ((mine.status === "preparada" && b.status !== "preparada")
+              || (mine.status === b.status && (b.statusAt || "") > (mine.statusAt || ""))) {
+          pbById.set(b.id, b); prepChanged = true;
+        }
+      }
+      const pbLimpias = [...pbById.values()].filter(b => !state.gone.prep[b.id]);
+      if (pbLimpias.length !== (state.prepBids[c] || []).length) prepChanged = true;
+      state.prepBids[c] = pbLimpias;
       // favoritos: unión menos lápidas
       const favs = new Set((state.favs[c] || []).map(String));
       for (const pid of (data.favs?.[c] || []).map(String)) if (!state.gone.favs[pid] && !favs.has(pid)) { favs.add(pid); changed = true; }
@@ -918,10 +993,11 @@ async function mergeCloud(){
       if (state.moves[c].length !== antesM) changed = true;
     }
     if (schedChanged) localStorage.setItem("fs_schedbids_v1", JSON.stringify(state.schedBids));
+    if (prepChanged) localStorage.setItem("fs_prepbids_v1", JSON.stringify(state.prepBids));
     if (changed) { persist(); render(); }
     else {
       localStorage.setItem("fs_gone_v1", JSON.stringify(state.gone));
-      if (schedChanged) render();
+      if (schedChanged || prepChanged) render();
     }
   } catch(e) { /* sin red: se reintenta en el próximo ciclo */ }
 }
@@ -4203,6 +4279,18 @@ function openBidModal(marketId, pidStr, price, myBid, exp){
           <button class="btn-ghost" style="width:100%" id="bidSched">Programar puja</button>
         </div>
       </details>
+      <details style="margin-top:10px" ${state.prepBids[c].some(b => b.marketId === String(marketId) && b.status === "preparada") ? "open" : ""}>
+        <summary style="cursor:pointer;font-size:12.5px;color:var(--text-2);font-weight:600;list-style:none">🧺 Preparar la puja para lanzarlas todas juntas ›</summary>
+        <div style="padding-top:11px">
+          ${(() => { const ya = state.prepBids[c].find(b => b.marketId === String(marketId) && b.status === "preparada");
+            return ya ? `<div class="card" style="padding:9px 12px;margin-bottom:10px;font-size:12px">Ya está en la cesta con <b>${fmtM(ya.amount)} €</b>. Preparar otra la sustituye.</div>` : ""; })()}
+          <div style="font-size:11.5px;color:var(--text-3);line-height:1.55;margin-bottom:10px">
+            La puja de arriba se guarda en la cesta, sin enviarse. Cuando pulses <b>🚀 Hacer pujas</b>
+            (en la pestaña Pujas) saldrán todas de golpe — tú eliges el momento y nadie ve tu interés hasta entonces.
+          </div>
+          <button class="btn-ghost" style="width:100%" id="bidPrep">Preparar puja</button>
+        </div>
+      </details>
     </div>`, ov => {
       bindMoney(ov.querySelector("#bidAmount"));
       // simulador: ¿a quién superas con esta cantidad?
@@ -4266,6 +4354,17 @@ function openBidModal(marketId, pidStr, price, myBid, exp){
         persistSched();
         closeModal();
         toast("⏰ Puja programada para el " + hora, "ok");
+        render();
+      });
+      ov.querySelector("#bidPrep")?.addEventListener("click", () => {
+        const amount = moneyVal(ov.querySelector("#bidAmount"));
+        if (!amount || amount < +price) { toast("La puja debe ser al menos el precio de salida", "err"); return; }
+        state.prepBids[c] = state.prepBids[c].filter(b => !(b.marketId === String(marketId) && b.status === "preparada"));
+        state.prepBids[c].push({ id: uid(), marketId: String(marketId), pid: String(pidStr), name,
+          amount, price: +price, expires: exp || null, status: "preparada", createdAt: new Date().toISOString() });
+        persistPrep();
+        closeModal();
+        toast("🧺 " + name + " en la cesta — lánzalas desde la pestaña Pujas", "ok");
         render();
       });
     });
@@ -4683,7 +4782,7 @@ function ligaTabMercado(c, d){
       <div class="mk-top" ${local ? `onclick="openPlayer('${pid}')"` : ""}>
         <img class="mk-photo" loading="lazy" src="${esc(img)}" alt="" onerror="this.style.visibility='hidden'">
         <div style="flex:1;min-width:0">
-          <div class="mk-name">${esc(name)}</div>
+          <div class="mk-name">${isFav(pid) ? "⭐ " : ""}${esc(name)}</div>
           <div class="p-meta" style="margin-top:3px"><span class="pos-chip" style="color:${pos.color};background:${pos.bg}">${pos.tag}</span>
             ${t ? `<img src="${esc(t.badgeColor)}" alt="" loading="lazy"> ${esc(t.shortName || t.name)}` : ""}${local ? ` · ${local.points ?? 0} pts` : ""}</div>
           ${dd ? `<div class="p-meta" style="margin-top:5px">
@@ -4748,7 +4847,25 @@ function ligaTabPujas(c, d){
       <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();bidFromMarket(${idx})">Modificar / retirar</button>
     </div>`));
   });
-  // pujas programadas de este aparato: pendientes siempre; hechas/fallidas, 24 h
+  // la cesta: preparadas siempre; lanzadas/fallidas, 24 h
+  const prep = (state.prepBids[c] || []).filter(b =>
+    b.status === "preparada" || Date.now() - new Date(b.statusAt || b.createdAt || 0).getTime() < 86400000);
+  const listosPrep = prep.filter(b => b.status === "preparada");
+  const totalPrep = listosPrep.reduce((a, b) => a + b.amount, 0);
+  const prepHtml = prep.length ? `
+    <div class="section-title">🧺 Pujas preparadas</div>
+    <div class="card" style="margin-bottom:10px">${prep.map(b => `
+      <div class="p-row" style="cursor:default">
+        <div class="p-main"><div class="p-name">${esc(b.name)}</div>
+          <div class="p-meta">${b.status === "preparada"
+            ? `en la cesta${b.expires ? " · su mercado cierra a las " + new Date(b.expires).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}`
+            : b.status === "hecha" ? `<span class="up">✔ ${esc(b.result || "enviada")}</span>` : `<span class="down">✖ ${esc(b.result || "falló")}</span>`}</div></div>
+        <div class="p-right"><div class="p-val">${fmtM(b.amount)} €</div>
+          <button class="btn-ghost ${b.status === "preparada" ? "btn-danger" : ""}" style="padding:5px 10px;font-size:11px;margin-top:4px" onclick="cancelPrepBid('${esc(b.id)}')">${b.status === "preparada" ? "Quitar" : "Limpiar"}</button></div>
+      </div>`).join("")}</div>
+    ${listosPrep.length ? `<button class="btn-acc" id="prepGo" style="width:100%;margin-bottom:6px;padding:13px;font-size:14.5px" onclick="firePrepBids()">🚀 Hacer pujas (${listosPrep.length} · ${fmtM(totalPrep)} €)</button>
+    <div style="font-size:10.5px;color:var(--text-3);margin:0 4px 12px">Salen todas de golpe cuando TÚ pulses — hasta entonces nadie ve tu interés.</div>` : ""}` : "";
+  // pujas programadas: pendientes siempre; hechas/fallidas, 24 h
   const sched = (state.schedBids[c] || []).filter(b =>
     b.status === "pendiente" || Date.now() - new Date(b.when).getTime() < 86400000);
   const schedHtml = sched.length ? `
@@ -4763,11 +4880,11 @@ function ligaTabPujas(c, d){
           <button class="btn-ghost ${b.status === "pendiente" ? "btn-danger" : ""}" style="padding:5px 10px;font-size:11px;margin-top:4px" onclick="cancelSchedBid('${esc(b.id)}')">${b.status === "pendiente" ? "Cancelar" : "Quitar"}</button></div>
       </div>`).join("")}</div>
     <div style="font-size:10.5px;color:var(--text-3);margin:-6px 4px 12px">Se envían solas desde este aparato con la app abierta (en el PC, con dejarla en la bandeja vale).</div>` : "";
-  if (!rows.length && !schedHtml) return `<div class="card"><div class="empty-state"><div class="big">🤝</div>
+  if (!rows.length && !schedHtml && !prepHtml) return `<div class="card"><div class="empty-state"><div class="big">🤝</div>
     No tienes pujas activas ahora mismo.<br>
-    <span style="font-size:11.5px;color:var(--text-3)">Puja desde «Mercado del día» — ahí también puedes dejarla programada para el último momento. Si acabas de pujar y no aparece, recarga con el botón de arriba.
+    <span style="font-size:11.5px;color:var(--text-3)">Puja desde «Mercado del día» — ahí también puedes dejarla <b>preparada</b> (para lanzarlas todas juntas cuando quieras) o <b>programada</b> a una hora. Si acabas de pujar y no aparece, recarga con el botón de arriba.
     Y si en la app oficial tienes pujas que aquí no salen, ve a Actividad → «Copiar muestra técnica» y pásasela a Claude.</span></div></div>`;
-  return `${schedHtml}${rows.length ? `<div style="font-size:11.5px;color:var(--text-3);margin-bottom:8px">${rows.length} ${rows.length === 1 ? "puja activa" : "pujas activas"}</div>
+  return `${prepHtml}${schedHtml}${rows.length ? `<div style="font-size:11.5px;color:var(--text-3);margin-bottom:8px">${rows.length} ${rows.length === 1 ? "puja activa" : "pujas activas"}</div>
   <div class="card">${rows.join("")}</div>` : ""}`;
 }
 
