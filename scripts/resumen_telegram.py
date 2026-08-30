@@ -195,13 +195,15 @@ def personal_section(personal):
         if sq_known:
             balance = "sin cambios" if sq_total == 0 else f"<b>{sign(sq_total)}</b>"
             emoji = "🟢" if sq_total > 0 else ("🔴" if sq_total < 0 else "⚪")
-            out.append(f"👥 <b>Tu plantilla hoy:</b> {emoji} {balance}")
+            out.append(f"👥 Tu plantilla hoy: {emoji} {balance}")
             if sq_up:
-                out.append("   📈 " + " · ".join(f"{p['nickname']} {sign(d)}" for p, d in sq_up[:8])
-                           + (f" +{len(sq_up) - 8} más" if len(sq_up) > 8 else ""))
+                out.append("")
+                out.append("📈 <b>Suben</b>")
+                out.extend(f"• {p['nickname']}  <b>{sign(d)}</b>" for p, d in sq_up)
             if sq_down:
-                out.append("   📉 " + " · ".join(f"{p['nickname']} {sign(d)}" for p, d in sq_down[:8])
-                           + (f" +{len(sq_down) - 8} más" if len(sq_down) > 8 else ""))
+                out.append("")
+                out.append("📉 <b>Bajan</b>")
+                out.extend(f"• {p['nickname']}  <b>{sign(d)}</b>" for p, d in sq_down)
         if w_lines:
             out.append("👁 <b>Tus vigilados:</b> " + " · ".join(w_lines[:10]))
     return out

@@ -3388,6 +3388,9 @@ function openLineupEditor(){
 
 function viewPlantilla(){
   const c = comp();
+  // al entrar en Mi Plantilla, la liga se refresca sola (loadLiga se limita a
+  // una vez cada 2 min): así las ventas/compras hechas fuera entran al momento
+  if (state.auth) loadLiga();
   const st = squadStats(c);
   const entries = state.squad[c];
   let body;
@@ -3852,13 +3855,17 @@ async function loadLiga(force){
   scheduleSync(); // sube dinero/plantilla frescos a la nube personal
   // el historial se mantiene al día en segundo plano: así tus compras/ventas
   // reales entran solas en Mi Plantilla y Movimientos con precio y fecha exactos
+  // reconciliación INMEDIATA con el equipo real recién bajado: altas y bajas
+  // entran al momento, sin esperar al historial (que llega detrás y refina)
+  if (state.auth && out.team) {
+    quickAddFromRoster(c, out.team);
+    reconcileSquad(c);
+  }
   if (state.auth && !state.actFull[c]?.done) loadFullActivity(c);
   // con el historial ya en memoria (sesión que sobrevive de antes), la cadena
-  // de loadFullActivity no vuelve a correr: reconciliar aquí, en CADA refresco,
-  // con el equipo real recién bajado — si no, una venta hecha fuera podía
-  // quedarse en Mi Plantilla para siempre
+  // de loadFullActivity no vuelve a correr: reconciliar aquí, en CADA refresco
   else if (state.auth && state.actFull[c]?.done) {
-    syncRealMoves(true).then(() => { syncDraftPlayers(c); reconcileSquad(c); });
+    syncRealMoves(true).then(() => { syncDraftPlayers(c); fixPendingPrices(c); reconcileSquad(c); });
   }
   if (state.view === "liga") render();
 }
@@ -3945,7 +3952,7 @@ async function loadFullActivity(c, force){
   if (state.view === "liga") render();
   // importa en silencio MIS operaciones nuevas (precio y fecha reales), asigna
   // valor de origen a la plantilla inicial y CONTRASTA contra el equipo real
-  if (st.done) syncRealMoves(true).then(() => { syncDraftPlayers(c); reconcileSquad(c); });
+  if (st.done) syncRealMoves(true).then(() => { syncDraftPlayers(c); fixPendingPrices(c); reconcileSquad(c); });
 }
 
 /* Esquema REAL de la actividad (visto en LaLigaApp): activityTypeId
@@ -4006,7 +4013,7 @@ function computeBudgets(c){
   const maps = managerMaps(c);
 
   const agg = {};
-  const A = tid => agg[tid] || (agg[tid] = { buys: 0, sells: 0, prizes: 0, nBuys: 0, nSells: 0 });
+  const A = tid => agg[tid] || (agg[tid] = { buys: 0, sells: 0, prizes: 0, blind: 0, nBuys: 0, nSells: 0 });
   let hasPrizes = false;
   for (const raw of act.items) {
     const a = parseAct(raw);
@@ -4015,6 +4022,7 @@ function computeBudgets(c){
     const t1 = actTeam(a, maps, 1), t2 = actTeam(a, maps, 2);
     if (a.type === 6) { if (t1) { A(t1).prizes += m; hasPrizes = true; } }
     else if (a.type === 33) { if (t1) { A(t1).sells += m; A(t1).nSells++; } }
+    else if (a.type === 4) { if (t1) A(t1).blind += m; } // blindar cuesta dinero
     else if (a.type === 1 || a.type === 31 || a.type === 32) {
       if (t1) { A(t1).buys += m; A(t1).nBuys++; }
       if (t2) { A(t2).sells += m; A(t2).nSells++; } // el que recibe el traspaso/cláusula cobra
@@ -4024,26 +4032,32 @@ function computeBudgets(c){
   const myId = state.myLeague[c] && state.myLeague[c].teamId;
   const myMoney = ligaMoney(d && d.money);
   // recompensa diaria del juego (+100.000 por entrar, con su anuncio): no sale
-  // en el historial de actividad, así que se estima que todos la recogen cada
-  // día desde que arrancó la liga
+  // en el historial de actividad, así que se estima que cada equipo la recoge
+  // cada día desde SU alta en la liga (tipo 9; si no consta, desde el arranque)
   let firstDay = null;
+  const joins = {};
   for (const raw of act.items) {
     const a = parseAct(raw);
     if (!a.date) continue;
     const di = +String(a.date).slice(0, 10).replace(/-/g, "");
     if (!firstDay || di < firstDay) firstDay = di;
+    if (a.type === 9) {
+      const t = actTeam(a, maps, 1);
+      if (t && (!joins[t] || di < joins[t])) joins[t] = di;
+    }
   }
   const toDate = n => new Date(Math.floor(n / 10000), Math.floor(n / 100) % 100 - 1, n % 100);
   const todayInt = +new Date().toLocaleDateString("sv-SE").replace(/-/g, "");
-  const dailyDays = firstDay ? Math.max(0, Math.round((toDate(todayInt) - toDate(firstDay)) / 864e5)) + 1 : 0;
-  const daily = dailyDays * 100000;
+  const diasDesde = di => di ? Math.max(0, Math.round((toDate(todayInt) - toDate(di)) / 864e5)) + 1 : 0;
   const rows = standing.map((r, i) => {
     const team = r.team || r;
     const tid = String(team.id ?? "");
-    const ops = agg[tid] || { buys: 0, sells: 0, prizes: 0, nBuys: 0, nSells: 0 };
+    const ops = agg[tid] || { buys: 0, sells: 0, prizes: 0, blind: 0, nBuys: 0, nSells: 0 };
     const points = +(r.points ?? r.teamPoints ?? 0);
     const extra = hasPrizes ? ops.prizes : Math.round(100000 * points);
-    const base = INITIAL_BUDGET - ops.buys + ops.sells;
+    const base = INITIAL_BUDGET - ops.buys + ops.sells - (ops.blind || 0);
+    const dailyDays = diasDesde(joins[tid] || firstDay);
+    const daily = dailyDays * 100000;
     return {
       tid, pos: r.position ?? i + 1,
       name: team.name || (team.manager && team.manager.managerName) || "Equipo",
@@ -4056,9 +4070,24 @@ function computeBudgets(c){
     };
   });
 
+  // calibración con MI dinero real: lo que la fórmula no puede ver (recompensas
+  // sin recoger, extras del juego…) se mide en mi propio equipo y se traslada a
+  // los rivales en proporción a sus días en la liga
   let incomplete = false;
   const me = rows.find(r => r.isMe);
-  if (me && myMoney != null && Math.abs(myMoney - (me.base + me.extra + daily)) > 3000000) incomplete = true;
+  if (me && myMoney != null) {
+    const miFormula = me.base + me.extra + me.daily;
+    const sesgo = myMoney - miFormula;
+    if (Math.abs(sesgo) > 3000000) incomplete = true;
+    else if (me.dailyDays > 0 && sesgo !== 0) {
+      const porDia = sesgo / me.dailyDays;
+      for (const r of rows) {
+        if (r.isMe) continue;
+        r.ajuste = Math.round(porDia * r.dailyDays);
+        r.budget += r.ajuste;
+      }
+    }
+  }
   return { rows, hasPrizes, incomplete };
 }
 /* proyección de la clasificación final de la liga privada: ritmo actual de
@@ -4492,7 +4521,16 @@ async function syncRealMoves(auto){
     if (a._kind === "sell") {
       const entry = state.squad[c].find(e => String(e.pid) === a.pid);
       const buyPrice = entry ? entry.buyPrice : null;
-      state.moves[c].push({ id: uid(), actId: a.id, real: true, type: "sell", pid: a.pid, name: a.name, price: money, date, buyPrice, profit: buyPrice != null ? money - buyPrice : null });
+      // si la reconciliación rápida ya anotó esta venta estimada, se mejora
+      // con el dato real en vez de duplicar el movimiento
+      const est = state.moves[c].find(m => m.type === "sell" && m.estimado && !m.actId && String(m.pid) === a.pid);
+      if (est) {
+        est.actId = a.id; est.real = true; est.estimado = false;
+        est.price = money; est.date = date;
+        if (est.buyPrice != null) est.profit = money - est.buyPrice;
+      } else {
+        state.moves[c].push({ id: uid(), actId: a.id, real: true, type: "sell", pid: a.pid, name: a.name, price: money, date, buyPrice, profit: buyPrice != null ? money - buyPrice : null });
+      }
       if (entry) state.squad[c] = state.squad[c].filter(e => e.id !== entry.id);
       resumen.push(`venta ${a.name} +${fmtM(money)}`);
     } else {
@@ -4524,18 +4562,20 @@ async function syncRealMoves(auto){
 function reconcileSquad(c){
   const d = state.liga.data[c];
   const act = state.actFull[c];
-  if (!state.auth || !d?.team || !act?.done) return;
+  // el historial NO es requisito: sin él, la venta se anota estimada y el
+  // historial la mejora después (así salir y entrar limpia al instante)
+  if (!state.auth || !d?.team) return;
   const roster = new Set((d.team.players || d.team.playerTeams || [])
     .map(x => String((x.playerMaster || x.player || x).id ?? "")).filter(Boolean));
   if (!roster.size) return; // respuesta rara de la API: mejor no tocar nada
   const myId = String(state.myLeague[c]?.teamId || "");
-  const maps = managerMaps(c);
+  const maps = act?.done ? managerMaps(c) : null;
   const fuera = [];
   for (const e of [...state.squad[c]]) {
     if (e.custom || !e.pid || roster.has(String(e.pid))) continue;
     // la venta real más reciente de ese jugador en el historial (va de nuevo a viejo)
     let sale = null;
-    for (const raw of act.items) {
+    if (act?.done) for (const raw of act.items) {
       const a = parseAct(raw);
       if (a.pid !== String(e.pid) || a.money == null) continue;
       const vendiYo = (a.type === 33 && actTeam(a, maps, 1) === myId)
@@ -4560,6 +4600,65 @@ function reconcileSquad(c){
     render();
     toast("🧹 Ya no están en tu equipo real (venta anotada): " + fuera.slice(0, 3).join(", ") + (fuera.length > 3 ? " +" + (fuera.length - 3) : ""), "ok");
   }
+}
+
+/* Altas RÁPIDAS: jugadores de mi equipo real que falten en Mi Plantilla entran
+   al momento (comprados fuera de la app, p. ej. desde el móvil oficial). El
+   precio exacto llega con el historial (pendingPrice) o del alta (draft). */
+function quickAddFromRoster(c, team){
+  const roster = (team?.players || team?.playerTeams || []);
+  if (!roster.length) return;
+  const act = state.actFull[c];
+  const pmap = act?.done ? purchaseMap(c) : null;
+  const myId = String(state.myLeague[c]?.teamId || "");
+  const nuevos = [];
+  for (const x of roster) {
+    const pm = x.playerMaster || x.player || x;
+    const pid = String(pm.id ?? "");
+    if (!pid || state.squad[c].some(e => String(e.pid) === pid)) continue;
+    const local = state.byId[c].get(pid);
+    if (!local) continue;
+    const real = pmap ? pmap[myId + ":" + pid] : null;
+    state.squad[c].push({ id: uid(), pid, name: local.nickname, pos: String(local.positionId), teamId: String(local.teamId),
+      buyPrice: real != null ? real : pVal(local), buyDate: todayISO(), custom: false, imported: true,
+      pendingPrice: real == null });
+    nuevos.push(local.nickname);
+  }
+  if (nuevos.length) {
+    persist();
+    render();
+    toast("🆕 En tu equipo real: " + nuevos.slice(0, 3).join(", ") + (nuevos.length > 3 ? " +" + (nuevos.length - 3) : ""), "ok");
+    if (!act?.done && !act?.loading) loadFullActivity(c);
+  }
+}
+
+/* Cuando el historial está listo, pone el precio y fecha REALES a las altas
+   rápidas que entraron con precio provisional. */
+function fixPendingPrices(c){
+  const act = state.actFull[c];
+  if (!act?.done) return;
+  const myId = String(state.myLeague[c]?.teamId || "");
+  const pmap = purchaseMap(c);
+  let n = 0;
+  for (const e of state.squad[c]) {
+    if (!e.pendingPrice) continue;
+    const real = pmap[myId + ":" + e.pid];
+    if (real != null) { e.buyPrice = real; n++; }
+    delete e.pendingPrice; // sin compra en el historial: syncDraftPlayers lo trata como alta inicial
+  }
+  if (n) persist();
+}
+
+/* El botón de refrescar: TODO de una vez — datos publicados, liga completa
+   (con reconciliación de plantilla incluida) y nube personal. */
+async function refreshAll(){
+  toast("Actualizando todo…");
+  await Promise.allSettled([
+    autoCheck(),
+    mergeCloud(),
+    state.auth ? loadLiga(true) : Promise.resolve(),
+  ]);
+  render();
 }
 
 /* plantilla inicial: los jugadores que vinieron CON el equipo (sin compra en el
@@ -5382,7 +5481,7 @@ function ligaTabRivales(c, d){
 
   return `
   <div style="font-size:11.5px;color:var(--text-3);margin-bottom:10px;line-height:1.5">
-    Presupuesto: 100M iniciales + ventas − compras + ${B.hasPrizes ? "<b>premios de jornada reales</b> (del historial de la liga)" : "<b>100.000 € por punto</b> (estimado)"} + <b>recompensa diaria</b> (100k/día, estimando que todos la recogen). Tu fila usa tu dinero real.
+    Presupuesto: 100M iniciales + ventas − compras − blindajes + ${B.hasPrizes ? "<b>premios de jornada reales</b> (del historial de la liga)" : "<b>100.000 € por punto</b> (estimado)"} + <b>recompensa diaria</b> (100k/día desde el alta de cada equipo), y <b>calibrado contra tu dinero real</b>: la desviación que la fórmula no ve se mide en tu equipo y se traslada a los rivales. Tu fila usa tu dinero real.
     ${B.incomplete ? `<br><span style="color:var(--orange)">⚠ La fórmula no cuadra con tu dinero real: el historial visible quizá no cubre toda la liga. Tómalo como aproximación.</span>` : ""}
   </div>
   ${projectionHtml(c, B)}
@@ -5402,7 +5501,9 @@ function ligaTabRivales(c, d){
           <div class="budget-line" style="padding-top:10px"><span>Compras (${r.nBuys})</span><b class="down">−${fmtM(r.buys)}</b></div>
           <div class="budget-line"><span>Ventas (${r.nSells})</span><b class="up">+${fmtM(r.sells)}</b></div>
           ${r.extra ? `<div class="budget-line"><span>${B.hasPrizes ? "Premios de jornada (reales)" : `Premios estimados (${r.points} pts)`}</span><b class="up">+${fmtM(r.extra)}</b></div>` : ""}
+          ${r.blind ? `<div class="budget-line"><span>Blindajes</span><b class="down">−${fmtM(r.blind)}</b></div>` : ""}
           ${r.daily && !r.isMe ? `<div class="budget-line"><span>Recompensas diarias (~${r.dailyDays} días × 100k)</span><b class="up">+${fmtM(r.daily)}</b></div>` : ""}
+          ${r.ajuste ? `<div class="budget-line"><span>Ajuste medido en mi equipo real</span><b class="${cls(r.ajuste)}">${fmtMSign(r.ajuste)}</b></div>` : ""}
           <div class="budget-line total"><span>Presupuesto${r.isMe ? " (tu dinero real)" : " estimado"}</span><b style="color:var(--acc)">${fmtM(r.budget)} €</b></div>
           ${players.map(x => {
             const pm = x.playerMaster || x.player || x;
@@ -5667,7 +5768,7 @@ function ligaTabDirecto(c, d){
   <div class="card" style="padding:13px 15px;margin-bottom:12px;display:flex;align-items:center;gap:11px">
     <span class="sync-dot ${isLive ? "pulsing" : ""}" style="background:${isLive ? "var(--red)" : "var(--text-3)"}"></span>
     <div style="flex:1;font-size:13px;font-weight:700">Jornada ${wn} ${isLive ? "EN JUEGO" : "· sin partidos ahora"}</div>
-    <button class="icon-btn" onclick="autoCheck().then(()=>render())" title="Refrescar">${IC.refresh}</button>
+    <button class="icon-btn" onclick="refreshAll()" title="Refrescar">${IC.refresh}</button>
   </div>
   ${mineHtml}
   ${liveTable}`;
@@ -6451,8 +6552,9 @@ function updateBadge(){
     if (mins % (live ? 2 : 5) === 0) autoCheck();
     if (mins % 5 === 0) mergeCloud(); // trae lo que hicieras en el otro aparato
   }, 60000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) { autoCheck(); mergeCloud(); } });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { autoCheck(); mergeCloud(); if (state.auth) loadLiga(); } });
   mergeCloud(); // al arrancar: fusiona lo personal con la nube compartida
+  if (state.auth) loadLiga(); // y la liga entera (con reconciliación de plantilla)
   // Mi Liga: refresco periódico suave (loadLiga ya limita a 1 vez cada 2 min)
   setInterval(() => { if (state.view === "liga" && state.auth && !document.hidden) loadLiga(); }, 120000);
   // barra inferior: se oculta mientras el teclado está abierto para que no "flote"

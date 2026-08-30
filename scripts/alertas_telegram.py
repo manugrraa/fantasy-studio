@@ -28,9 +28,26 @@ def api_get(path):
         return json.load(r)
 
 
+def partido_terminado(m):
+    """Solo cuenta como acabado lo que la API marca como acabado (matchState 7):
+    los marcadores existen ya DURANTE el partido y no valen como señal. De
+    respaldo (sin matchState): marcador presente y 2h15 desde el inicio."""
+    st = m.get("matchState")
+    if st is not None:
+        return st == 7
+    if m.get("localScore") is None or m.get("visitorScore") is None:
+        return False
+    try:
+        from datetime import datetime, timezone
+        ini = datetime.fromisoformat(str(m.get("matchDate")))
+        return (datetime.now(timezone.utc) - ini.astimezone(timezone.utc)).total_seconds() > 135 * 60
+    except Exception:
+        return False
+
+
 def match_end_alerts(personal, meta, state):
-    """🏁 Cuando acaba un partido con jugadores MÍOS: sus puntos finales y el
-    total acumulado de mi jornada. Un aviso por partido (state['fin'])."""
+    """🏁 Cuando TERMINA (confirmado) un partido con jugadores MÍOS: sus puntos
+    finales y el total acumulado de mi jornada. Un aviso por partido."""
     alerts = []
     fin = state.setdefault("fin", {})
     for comp in ("2", "1"):
@@ -75,7 +92,7 @@ def match_end_alerts(personal, meta, state):
         total = sum(wpts(pid) or 0 for pid in base)
 
         for m in cal:
-            if m.get("localScore") is None or m.get("visitorScore") is None:
+            if not partido_terminado(m):
                 continue
             mid = f"{comp}:{wn}:{m.get('id')}"
             if fin.get(mid):
@@ -87,15 +104,11 @@ def match_end_alerts(personal, meta, state):
                 continue
             ln = teams.get(lid, {}).get("shortName") or teams.get(lid, {}).get("name") or "?"
             vn = teams.get(vid, {}).get("shortName") or teams.get(vid, {}).get("name") or "?"
-            partes = []
-            for p in involved:
-                pts = wpts(p["id"])
-                partes.append(f"{p['nickname']} <b>{pts if pts is not None else '—'} pts</b>")
-            alerts.append(
-                f"🏁 Final {ln} {m['localScore']}-{m['visitorScore']} {vn}\n"
-                + " · ".join(partes)
-                + f"\n📊 Llevas <b>{total} pts</b> en la J{wn} (+{fmt_m(total * 100000)} de premio)"
-            )
+            partes = [f"• {p['nickname']} — <b>{(wpts(p['id']) if wpts(p['id']) is not None else '—')} pts</b>" for p in involved]
+            alerts.append(("Final de partido",
+                f"🏁 <b>{ln} {m['localScore']}-{m['visitorScore']} {vn}</b> · puntos ya confirmados\n"
+                + "\n".join(partes)
+                + f"\n\n📊 Llevas <b>{total} pts</b> en la J{wn} (+{fmt_m(total * 100000)} de premio)"))
     return alerts
 
 
@@ -136,9 +149,9 @@ def live_goal_alerts(personal, meta, state):
             k = f"{comp}:{pid}:{wn}"
             prev = ga.get(k) or [0, 0]
             if goals > prev[0]:
-                alerts.append(f"⚽ ¡GOOOL de <b>{name}</b>!{' (x' + str(goals) + ')' if goals > 1 else ''} — J{wn}")
+                alerts.append(("¡Gol de los tuyos!", f"⚽ ¡GOOOL de <b>{name}</b>!{' (x' + str(goals) + ')' if goals > 1 else ''} — J{wn}"))
             if assists > prev[1]:
-                alerts.append(f"🅰️ ¡Asistencia de <b>{name}</b>! — J{wn}")
+                alerts.append(("¡Gol de los tuyos!", f"🅰️ ¡Asistencia de <b>{name}</b>! — J{wn}"))
             if goals > prev[0] or assists > prev[1]:
                 ga[k] = [goals, assists]
     return alerts
@@ -171,14 +184,34 @@ def sign(n):
     return ("+" if n > 0 else "") + fmt_m(n)
 
 
-def today_int():
+def madrid_now():
     from datetime import datetime, timezone, timedelta
     try:
         from zoneinfo import ZoneInfo
-        now = datetime.now(ZoneInfo("Europe/Madrid"))
+        return datetime.now(ZoneInfo("Europe/Madrid"))
     except Exception:
-        now = datetime.now(timezone(timedelta(hours=2)))
-    return int(now.strftime("%Y%m%d"))
+        return datetime.now(timezone(timedelta(hours=2)))
+
+
+def today_int():
+    return int(madrid_now().strftime("%Y%m%d"))
+
+
+def trocear(msg, lim=3900):
+    """Telegram corta en 4096: partimos por lineas ANTES de que corte el, para
+    no perder jamas informacion de jugadores."""
+    if len(msg) <= lim:
+        return [msg]
+    partes, actual = [], ""
+    for linea in msg.split("\n"):
+        if actual and len(actual) + len(linea) + 1 > lim:
+            partes.append(actual)
+            actual = linea
+        else:
+            actual = actual + "\n" + linea if actual else linea
+    if actual:
+        partes.append(actual)
+    return partes
 
 
 def main():
@@ -236,17 +269,19 @@ def main():
             if reached and not state["obj"].get(k):
                 state["obj"][k] = today
                 verbo = "ha subido hasta" if w.get("dir") == "above" else "ha bajado hasta"
-                alerts.append(f"🎯 <b>{p['nickname']}</b> {verbo} <b>{fmt_m(val)}</b> — tu objetivo de {fmt_m(target)} está alcanzado.")
+                alerts.append(("Objetivo alcanzado", f"🎯 <b>{p['nickname']}</b> {verbo} <b>{fmt_m(val)}</b> — tu objetivo de {fmt_m(target)} está alcanzado."))
             elif not reached and state["obj"].get(k):
                 del state["obj"][k]  # se rearma
 
-        # 💰 el parte del dia: cuando los valores de HOY quedan confirmados
-        # (data/values_day.json, lo escribe update_data), UNA vez al dia:
-        # balance total de mi plantilla con TODAS sus subidas y bajadas.
-        # Sustituye a los antiguos avisos sueltos de "movimiento fuerte".
+        # 💰 el parte del dia: valores de HOY confirmados (values_day.json) y
+        # nunca antes de la 01:25 (los publica el juego a la 01:00; margen para
+        # que todo asiente). UNA vez al dia: balance total de mi plantilla y
+        # TODAS sus subidas y bajadas en lista, sin recortar nombres.
         vday = load("values_day.json", {})
         dia = state.setdefault("dia", {})
-        if vday.get(comp) == today and dia.get(comp) != today:
+        ahora = madrid_now()
+        pasa_hora = (ahora.hour, ahora.minute) >= (1, 25)
+        if vday.get(comp) == today and dia.get(comp) != today and pasa_hora:
             ups, downs, total, known = [], [], 0, 0
             for e in (personal.get("squad") or {}).get(comp) or []:
                 pid = e.get("pid")
@@ -267,41 +302,56 @@ def main():
                 ups.sort(key=lambda x: -x[1])
                 downs.sort(key=lambda x: x[1])
                 emoji = "🟢" if total > 0 else ("🔴" if total < 0 else "⚪")
-                bloque = [f"💰 <b>Precios del día</b> — tu plantilla: {emoji} <b>{sign(total) if total else 'sin cambios'}</b>"]
+                bloque = [f"👥 Tu plantilla hoy: {emoji} <b>{sign(total) if total else 'sin cambios'}</b>"]
                 if ups:
-                    bloque.append("📈 " + " · ".join(f"{p['nickname']} {sign(d)}" for p, d in ups[:8])
-                                  + (f" y {len(ups) - 8} más" if len(ups) > 8 else ""))
+                    bloque.append("")
+                    bloque.append("📈 <b>Suben</b>")
+                    bloque.extend(f"• {p['nickname']}  <b>{sign(d)}</b>" for p, d in ups)
                 if downs:
-                    bloque.append("📉 " + " · ".join(f"{p['nickname']} {sign(d)}" for p, d in downs[:8])
-                                  + (f" y {len(downs) - 8} más" if len(downs) > 8 else ""))
-                alerts.append("\n".join(bloque))
+                    bloque.append("")
+                    bloque.append("📉 <b>Bajan</b>")
+                    bloque.extend(f"• {p['nickname']}  <b>{sign(d)}</b>" for p, d in downs)
+                alerts.append(("Precios actualizados", "\n".join(bloque)))
 
     if not alerts:
         save("alert_state.json", state)  # re-armes y limpieza aunque no haya avisos
         print("sin novedades")
         return
 
-    msg = "\n".join(["<b>⚡ Fantasy Studio — alerta</b>"] + alerts +
-                    ['<a href="https://manugrraa.github.io/fantasy-studio/">Abrir la app</a>'])
+    # un mensaje por CONCEPTO, con su propio título — nada de "alerta" genérica
+    grupos = []
+    for titulo, texto in alerts:
+        g = next((g for g in grupos if g[0] == titulo), None)
+        if g:
+            g[1].append(texto)
+        else:
+            grupos.append((titulo, [texto]))
+    mensajes = []
+    for titulo, textos in grupos:
+        cuerpo = (f"<b>⚡ Fantasy Studio — {titulo}</b>\n\n" + "\n\n".join(textos)
+                  + '\n\n<a href="https://manugrraa.github.io/fantasy-studio/">Abrir la app</a>')
+        mensajes.extend(trocear(cuerpo))
+
     if token.lower() == "dry":
-        # modo prueba: imprime el mensaje y NO toca el estado (el envio real
-        # de ese dia sigue pendiente para el workflow)
-        sys.stdout.buffer.write(("(dry) mensaje que se enviaria:\n\n" + msg).encode("utf-8", "replace"))
+        # modo prueba: imprime y NO toca el estado (el envio real sigue pendiente)
+        out = "\n\n————————————\n\n".join(mensajes)
+        sys.stdout.buffer.write((f"(dry) se enviarian {len(mensajes)} mensaje(s):\n\n" + out).encode("utf-8", "replace"))
         return
-    body = urllib.parse.urlencode({
-        "chat_id": chat, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": "true",
-    }).encode()
-    try:
-        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body, headers=UA)
-        with urllib.request.urlopen(req, timeout=30) as r:
-            ok = json.load(r).get("ok")
-    except Exception as e:
-        print("fallo al enviar:", e, file=sys.stderr)
-        sys.exit(1)
-    print("alerta enviada" if ok else "fallo al enviar")
-    if not ok:
-        sys.exit(1)
-    save("alert_state.json", state)  # solo tras enviar con éxito: si falla, se reintenta
+
+    for msg in mensajes:
+        body = urllib.parse.urlencode({
+            "chat_id": chat, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": "true",
+        }).encode()
+        try:
+            req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body, headers=UA)
+            with urllib.request.urlopen(req, timeout=30) as r:
+                if not json.load(r).get("ok"):
+                    raise Exception("telegram dijo que no")
+        except Exception as e:
+            print("fallo al enviar:", e, file=sys.stderr)
+            sys.exit(1)  # sin guardar estado: el proximo ciclo reintenta
+    print(f"{len(mensajes)} mensaje(s) enviados")
+    save("alert_state.json", state)  # solo tras enviar con éxito
 
 
 if __name__ == "__main__":
