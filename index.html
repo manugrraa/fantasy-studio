@@ -4409,6 +4409,44 @@ function openSellRealModal(pidStr){
     });
 }
 
+/* retirar UNA puja activa directamente desde la lista */
+function retirarPujaDe(marketId){
+  const c = comp();
+  const it = (state.liga.data[c]?.market || []).find(x => String(x.id) === String(marketId));
+  const myBid = it && (it.bid || it.myBid);
+  if (!myBid?.id) { toast("Esa puja ya no está (recarga la liga)", "err"); return; }
+  const pm = it.playerMaster || it.player || {};
+  const name = pm.nickname || pm.name || "ese jugador";
+  if (!confirm(`¿Retirar tu puja de ${fmtM(+(myBid.money ?? 0))} € por ${name}?`)) return;
+  const L = state.myLeague[c].leagueId;
+  ligaAction("Puja retirada", () =>
+    authFetch(`/api/v1/competition/${c}/league/${L}/market/${marketId}/bid/${myBid.id}/cancel?x-lang=es`, { method:"DELETE" }));
+}
+
+/* retirar TODAS las pujas activas de golpe */
+async function retirarTodasLasPujas(){
+  const c = comp();
+  const L = state.myLeague[c]?.leagueId;
+  if (!state.auth || !L) { toast("Inicia sesión en Mi Liga primero", "err"); return; }
+  const conPuja = (state.liga.data[c]?.market || []).filter(it => (it.bid || it.myBid)?.id);
+  if (!conPuja.length) { toast("No tienes pujas que retirar", "err"); return; }
+  const total = conPuja.reduce((a, it) => a + +((it.bid || it.myBid).money ?? 0), 0);
+  if (!confirm(`¿Retirar TODAS tus pujas (${conPuja.length}, total ${fmt(total)}) del mercado de tu liga REAL?`)) return;
+  const btn = document.getElementById("retirarTodas");
+  if (btn) { btn.disabled = true; btn.textContent = "Retirando…"; }
+  let ok = 0, mal = 0;
+  for (const it of conPuja) {
+    const b = it.bid || it.myBid;
+    try {
+      await authFetch(`/api/v1/competition/${c}/league/${L}/market/${it.id}/bid/${b.id}/cancel?x-lang=es`, { method:"DELETE" });
+      ok++;
+    } catch(e) { mal++; }
+  }
+  vibrate(16);
+  toast(`↩️ ${ok} ${ok === 1 ? "puja retirada" : "pujas retiradas"}${mal ? ` · ${mal} fallaron` : ""}`, mal ? "err" : "ok");
+  loadLiga(true);
+}
+
 function withdrawFromMarket(marketId, name){
   const c = comp();
   if (!confirm("¿Retirar a " + name + " del mercado de tu liga?")) return;
@@ -4847,16 +4885,21 @@ function bidFromMarket(idx){
 function ligaTabPujas(c, d){
   const market = d.market || [];
   const rows = [];
+  let totalActivas = 0;
   market.forEach((it, idx) => {
     const myBid = it.bid || it.myBid || null;
     if (!myBid) return;
     const pm = it.playerMaster || it.player || it;
     const price = it.salePrice ?? it.price ?? pm.marketValue ?? 0;
     const exp = it.expirationDate || it.expiration || null;
+    totalActivas += +(myBid.money ?? 0);
     rows.push(ligaPlayerRow(pm, `<div class="p-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
       <div><span class="p-val">${fmtM(+(myBid.money ?? 0))} €</span>
         <div class="p-sub">salida ${fmtM(+price)}${exp ? " · hasta " + new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : ""}</div></div>
-      <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();bidFromMarket(${idx})">Modificar / retirar</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn-ghost" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();bidFromMarket(${idx})">Modificar</button>
+        <button class="btn-ghost btn-danger" style="padding:7px 11px;font-size:11.5px" onclick="event.stopPropagation();retirarPujaDe('${esc(String(it.id))}')">Retirar</button>
+      </div>
     </div>`));
   });
   // la cesta: las pujas se quedan tras lanzarlas (con su último resultado al
@@ -4894,8 +4937,11 @@ function ligaTabPujas(c, d){
     No tienes pujas activas ahora mismo.<br>
     <span style="font-size:11.5px;color:var(--text-3)">Puja desde «Mercado del día» — ahí también puedes dejarla <b>preparada</b> (para lanzarlas todas juntas cuando quieras) o <b>programada</b> a una hora. Si acabas de pujar y no aparece, recarga con el botón de arriba.
     Y si en la app oficial tienes pujas que aquí no salen, ve a Actividad → «Copiar muestra técnica» y pásasela a Claude.</span></div></div>`;
-  return `${prepHtml}${schedHtml}${rows.length ? `<div style="font-size:11.5px;color:var(--text-3);margin-bottom:8px">${rows.length} ${rows.length === 1 ? "puja activa" : "pujas activas"}</div>
-  <div class="card">${rows.join("")}</div>` : ""}`;
+  return `${prepHtml}${schedHtml}${rows.length ? `
+  <div class="section-title">💰 Mis pujas activas (${rows.length} · ${fmtM(totalActivas)} €)</div>
+  <div class="card" style="margin-bottom:10px">${rows.join("")}</div>
+  ${rows.length > 1 ? `<button class="btn-ghost btn-danger" id="retirarTodas" style="width:100%;margin-bottom:6px;padding:11px" onclick="retirarTodasLasPujas()">↩️ Retirar todas las pujas (${rows.length})</button>
+  <div style="font-size:10.5px;color:var(--text-3);margin:0 4px 12px">Las quita todas del mercado de tu liga de una vez; las de la cesta no se tocan (para relanzarlas cuando quieras).</div>` : ""}` : ""}`;
 }
 
 /* --- pestaña: mis jugadores en venta --- */
