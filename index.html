@@ -899,10 +899,11 @@ async function pushSync(){
       schedBids: state.schedBids, // pujas programadas: el PC dispara lo del móvil
       prepBids: state.prepBids, // la cesta: preparas donde sea, lanzas donde sea
     };
-    await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey(), {
+    const r = await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey(), {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload), signal: AbortSignal.timeout(10000),
     });
+    if (r.ok) localStorage.setItem("fs_last_push", new Date().toISOString());
   } catch(e) { /* sin red: se reintenta en el próximo cambio */ }
 }
 /* Fusión AUTOMÁTICA y silenciosa con la nube: lo personal (vigilados,
@@ -6172,6 +6173,17 @@ function openMenu(){
       <details class="card" style="padding:0;margin-bottom:9px">
         <summary style="padding:12px 15px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-2);list-style:none">☁️ Nube personal y Telegram a medida</summary>
         <div style="padding:0 15px 14px;font-size:12px;color:var(--text-2);line-height:1.65">
+          ${(() => {
+            const push = localStorage.getItem("fs_last_push");
+            const hora = t => new Date(t).toLocaleString("es-ES", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
+            const sesion = state.auth ? "✅ sesión iniciada" : "⚠️ SIN sesión (entra en Mi Liga)";
+            return `<div class="card" style="padding:10px 12px;margin-bottom:10px;font-size:12px;line-height:1.7;background:var(--card-2)">
+              <b>Estado de este aparato</b><br>
+              ${sesion}<br>
+              ${push ? `✅ última copia subida: <b>${hora(push)}</b>` : "⚠️ este aparato aún NO ha subido nada a la nube"}<br>
+              ${_lastCloudAt ? `✅ última fusión con la nube: <b>${hora(_lastCloudAt)}</b>` : "⏳ aún sin fusionar con la nube"}
+            </div>`;
+          })()}
           Tu plantilla, vigilados y favoritos se copian solos (cifrados en tránsito) a TU Worker bajo esta clave secreta:<br>
           <code style="display:block;background:var(--card-2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin:8px 0;font-size:11px;word-break:break-all" id="syncKeyShow"></code>
           <button class="btn-ghost" style="width:100%;margin-bottom:8px" onclick="navigator.clipboard.writeText(syncKey()).then(()=>toast('Clave copiada','ok'))">Copiar clave</button>
