@@ -4050,12 +4050,20 @@ function computeBudgets(c){
   const toDate = n => new Date(Math.floor(n / 10000), Math.floor(n / 100) % 100 - 1, n % 100);
   const todayInt = +new Date().toLocaleDateString("sv-SE").replace(/-/g, "");
   const diasDesde = di => di ? Math.max(0, Math.round((toDate(todayInt) - toDate(di)) / 864e5)) + 1 : 0;
+  // ¿alcanza el historial hasta el nacimiento de la liga? Si vemos altas
+  // (tipo 9), sí: entonces la ausencia de premios significa que aún no ha
+  // cerrado ninguna jornada, no que se nos escapen.
+  const veLaLigaEntera = Object.keys(joins).length > 0;
   const rows = standing.map((r, i) => {
     const team = r.team || r;
     const tid = String(team.id ?? "");
     const ops = agg[tid] || { buys: 0, sells: 0, prizes: 0, blind: 0, nBuys: 0, nSells: 0 };
-    const points = +(r.points ?? r.teamPoints ?? 0);
-    const extra = hasPrizes ? ops.prizes : Math.round(100000 * points);
+    // los puntos de la clasificación de la API incluyen jornadas ANTERIORES a
+    // la liga: los buenos salen de los premios cobrados (100.000 € por punto)
+    const apiPoints = +(r.points ?? r.teamPoints ?? 0);
+    const points = hasPrizes ? Math.round(ops.prizes / 100000)
+                 : (veLaLigaEntera ? 0 : apiPoints);
+    const extra = hasPrizes ? ops.prizes : (veLaLigaEntera ? 0 : Math.round(100000 * apiPoints));
     const base = INITIAL_BUDGET - ops.buys + ops.sells - (ops.blind || 0);
     const dailyDays = diasDesde(joins[tid] || firstDay);
     const daily = dailyDays * 100000;
@@ -4063,7 +4071,7 @@ function computeBudgets(c){
       tid, pos: r.position ?? i + 1,
       name: team.name || (team.manager && team.manager.managerName) || "Equipo",
       manager: (team.manager && (team.manager.managerName || team.manager.name)) || "",
-      points,
+      points, apiPoints,
       teamValue: team.teamValue != null ? +team.teamValue : null,
       ...ops, extra, base, daily, dailyDays,
       budget: (myId && tid === String(myId) && myMoney != null) ? myMoney : base + extra + daily,
@@ -4071,21 +4079,20 @@ function computeBudgets(c){
     };
   });
 
-  // calibración con MI dinero real: lo que la fórmula no puede ver (recompensas
-  // sin recoger, extras del juego…) se mide en mi propio equipo y se traslada a
-  // los rivales en proporción a sus días en la liga
+  // Calibración con MI dinero real: mido en mi propio equipo lo que la fórmula
+  // no ve y se lo aplico a los rivales como diferencia FIJA (no por días): él
+  // siempre recoge la recompensa diaria, así que su desviación no viene de ahí,
+  // sino de algo común a todos desde el arranque (saldo inicial, extras).
   let incomplete = false;
   const me = rows.find(r => r.isMe);
   if (me && myMoney != null) {
-    const miFormula = me.base + me.extra + me.daily;
-    const sesgo = myMoney - miFormula;
+    const sesgo = myMoney - (me.base + me.extra + me.daily);
     if (Math.abs(sesgo) > 3000000) incomplete = true;
-    else if (me.dailyDays > 0 && sesgo !== 0) {
-      const porDia = sesgo / me.dailyDays;
+    else if (sesgo !== 0) {
       for (const r of rows) {
         if (r.isMe) continue;
-        r.ajuste = Math.round(porDia * r.dailyDays);
-        r.budget += r.ajuste;
+        r.ajuste = sesgo;
+        r.budget += sesgo;
       }
     }
   }
@@ -5482,7 +5489,8 @@ function ligaTabRivales(c, d){
 
   return `
   <div style="font-size:11.5px;color:var(--text-3);margin-bottom:10px;line-height:1.5">
-    Presupuesto: 100M iniciales + ventas − compras − blindajes + ${B.hasPrizes ? "<b>premios de jornada reales</b> (del historial de la liga)" : "<b>100.000 € por punto</b> (estimado)"} + <b>recompensa diaria</b> (100k/día desde el alta de cada equipo), y <b>calibrado contra tu dinero real</b>: la desviación que la fórmula no ve se mide en tu equipo y se traslada a los rivales. Tu fila usa tu dinero real.
+    Presupuesto: 100M iniciales + ventas − compras − blindajes + ${B.hasPrizes ? "<b>premios de jornada reales</b> (del historial de tu liga)" : "premios de jornada (aún no ha cerrado ninguna)"} + <b>recompensa diaria</b> (100k/día desde el alta de cada equipo), y <b>calibrado contra tu dinero real</b>: la desviación que la fórmula no ve se mide en tu equipo y se aplica igual a todos. Tu fila usa tu dinero real.<br>
+    Los <b>puntos</b> son los de ESTA liga (de los premios cobrados), no los de la clasificación general de la API, que incluye jornadas anteriores a tu liga. El <b>valor de equipo</b> sí es un dato exacto del juego.
     ${B.incomplete ? `<br><span style="color:var(--orange)">⚠ La fórmula no cuadra con tu dinero real: el historial visible quizá no cubre toda la liga. Tómalo como aproximación.</span>` : ""}
   </div>
   ${projectionHtml(c, B)}
@@ -5505,6 +5513,7 @@ function ligaTabRivales(c, d){
           ${r.blind ? `<div class="budget-line"><span>Blindajes</span><b class="down">−${fmtM(r.blind)}</b></div>` : ""}
           ${r.daily && !r.isMe ? `<div class="budget-line"><span>Recompensas diarias (~${r.dailyDays} días × 100k)</span><b class="up">+${fmtM(r.daily)}</b></div>` : ""}
           ${r.ajuste ? `<div class="budget-line"><span>Ajuste medido en mi equipo real</span><b class="${cls(r.ajuste)}">${fmtMSign(r.ajuste)}</b></div>` : ""}
+          ${r.apiPoints !== r.points ? `<div class="budget-line"><span style="color:var(--text-3)">Puntos en ESTA liga (la API dice ${r.apiPoints}, incluye jornadas previas)</span><b>${r.points}</b></div>` : ""}
           <div class="budget-line total"><span>Presupuesto${r.isMe ? " (tu dinero real)" : " estimado"}</span><b style="color:var(--acc)">${fmtM(r.budget)} €</b></div>
           ${players.map(x => {
             const pm = x.playerMaster || x.player || x;
