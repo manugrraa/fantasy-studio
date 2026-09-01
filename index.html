@@ -898,6 +898,19 @@ async function pushSync(){
       gone: state.gone, // lápidas: lo borrado no debe resucitar en otro aparato
       schedBids: state.schedBids, // pujas programadas: el PC dispara lo del móvil
       prepBids: state.prepBids, // la cesta: preparas donde sea, lanzas donde sea
+      // mi ONCE REAL de la jornada leído de la liga: así la crónica del bot
+      // puntúa con los 11 que alineé de verdad, no con toda la plantilla
+      realLineup: (() => {
+        const out = {};
+        for (const cc of ["1", "2"]) {
+          const lus = state.rivalLineups[cc];
+          const tid = String(state.myLeague[cc]?.teamId || "");
+          const mio = lus?.wn && lus.byTid ? lus.byTid[tid] : null;
+          if (mio) out[cc] = { wn: lus.wn, ids: mio.ids };
+        }
+        return out;
+      })(),
+      lineupHist: state.lineupHist, // mis onces reales de jornadas cerradas
     };
     const r = await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + syncKey(), {
       method: "PUT", headers: { "Content-Type": "application/json" },
@@ -3856,6 +3869,9 @@ async function loadLiga(force){
   scheduleSync(); // sube dinero/plantilla frescos a la nube personal
   // el historial se mantiene al día en segundo plano: así tus compras/ventas
   // reales entran solas en Mi Plantilla y Movimientos con precio y fecha exactos
+  // mi once real de la jornada recién cerrada (para la crónica del bot)
+  const prevW = state.meta?.comps?.[c]?.previousWeek;
+  if (state.auth && prevW && sel?.teamId) loadMyLineupWeek(c, prevW);
   // reconciliación INMEDIATA con el equipo real recién bajado: altas y bajas
   // entran al momento, sin esperar al historial (que llega detrás y refina)
   if (state.auth && out.team) {
@@ -5589,6 +5605,41 @@ function lineupIds(raw){
   return out.length >= 7 && out.length <= 11 ? out : null;
 }
 
+/* rutas candidatas de alineación (la buena se recuerda en fs_lineuppath_{c}) */
+function lineupPaths(c, tid, wn, leagueId){
+  return [
+    `/api/v1/competition/${c}/teams/${tid}/lineup/week/${wn}?x-lang=es`,
+    `/api/v1/teams/${tid}/lineup/week/${wn}?x-lang=es`,
+    `/api/v1/competition/${c}/leagues/${leagueId}/teams/${tid}/lineup/week/${wn}?x-lang=es`,
+  ];
+}
+
+/* MI once real de una jornada ya cerrada, guardado para siempre: así la
+   crónica del bot puntúa con los 11 que alineé de verdad (la app lo sube a la
+   nube; el bot no puede pedirlo porque no tiene mi sesión). */
+state.lineupHist = load("fs_lineup_hist", {});
+async function loadMyLineupWeek(c, wn){
+  if (!state.auth || !wn) return;
+  const sel = state.myLeague[c];
+  if (!sel?.teamId || !sel.leagueId) return;
+  const h = state.lineupHist[c] || (state.lineupHist[c] = {});
+  if (h[wn]) return;
+  const guardada = localStorage.getItem("fs_lineuppath_" + c);
+  const paths = lineupPaths(c, sel.teamId, wn, sel.leagueId);
+  const orden = guardada != null ? [+guardada, ...paths.map((_, i) => i)] : paths.map((_, i) => i);
+  for (const i of orden) {
+    try {
+      const ids = lineupIds(await authFetch(paths[i]));
+      if (ids) {
+        h[wn] = { ids, at: new Date().toISOString() };
+        localStorage.setItem("fs_lineup_hist", JSON.stringify(state.lineupHist));
+        scheduleSync(); // que el bot lo tenga para la crónica
+        return;
+      }
+    } catch(e) { /* siguiente ruta */ }
+  }
+}
+
 async function loadRivalLineups(c){
   const d = state.liga.data[c];
   const sel = state.myLeague[c];
@@ -5598,11 +5649,7 @@ async function loadRivalLineups(c){
   if (st.wn !== wn) { st.wn = wn; st.byTid = {}; st.done = false; st.loading = false; st.error = null; }
   if (st.done || st.loading) return;
   st.loading = true;
-  const PATHS = [
-    tid => `/api/v1/competition/${c}/teams/${tid}/lineup/week/${wn}?x-lang=es`,
-    tid => `/api/v1/teams/${tid}/lineup/week/${wn}?x-lang=es`,
-    tid => `/api/v1/competition/${c}/leagues/${sel.leagueId}/teams/${tid}/lineup/week/${wn}?x-lang=es`,
-  ];
+  const PATHS = [0, 1, 2].map(i => tid => lineupPaths(c, tid, wn, sel.leagueId)[i]);
   const key = "fs_lineuppath_" + c;
   let good = localStorage.getItem(key) == null ? -1 : +localStorage.getItem(key);
   let lastErr = null;

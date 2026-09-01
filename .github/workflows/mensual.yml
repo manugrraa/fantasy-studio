@@ -1,0 +1,39 @@
+name: Resumen mensual Telegram
+
+on:
+  schedule:
+    # Día 1 de cada mes a las 10:00 de España (verano). Repasa el mes cerrado.
+    - cron: "0 8 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mensual:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Enviar resumen mensual
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FANTASY_SYNC_KEY: ${{ secrets.FANTASY_SYNC_KEY }}
+        run: python scripts/mensual_telegram.py
+
+      - name: Guardar estado
+        run: |
+          git config user.name "fantasy-studio-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/mensual_state.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Sin estado nuevo"
+          else
+            git commit -m "mensual: resumen enviado"
+            git push
+          fi

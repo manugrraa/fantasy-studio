@@ -84,10 +84,27 @@ def main():
     players = load(f"players_{COMP}.json", [])
     by_id = {str(p["id"]): p for p in players}
 
-    # mi once: el montado en la app; si no, toda la plantilla
-    lineup = ((personal.get("lineup") or {}).get(COMP) or {}).get("ids") or []
-    if not lineup:
-        lineup = [e.get("pid") for e in (personal.get("squad") or {}).get(COMP) or [] if e.get("pid")]
+    # mi once: el REAL leido de la liga (lo sube la app); si no, el montado en
+    # la app; y como ultimo recurso, toda la plantilla
+    hist_xi = ((personal.get("lineupHist") or {}).get(COMP) or {}).get(str(prev)) \
+        or ((personal.get("lineupHist") or {}).get(COMP) or {}).get(prev)
+    real = (personal.get("realLineup") or {}).get(COMP) or {}
+    fuente = "tu once real"
+    caps = set()
+    ids_reales = None
+    if hist_xi and hist_xi.get("ids"):
+        ids_reales = hist_xi["ids"]
+    elif real.get("wn") == prev and real.get("ids"):
+        ids_reales = real["ids"]
+    if ids_reales:
+        lineup = [x.get("id") if isinstance(x, dict) else x for x in ids_reales]
+        caps = {str(x.get("id")) for x in ids_reales if isinstance(x, dict) and x.get("cap")}
+    else:
+        lineup = ((personal.get("lineup") or {}).get(COMP) or {}).get("ids") or []
+        fuente = "tu once"
+        if not lineup:
+            lineup = [e.get("pid") for e in (personal.get("squad") or {}).get(COMP) or [] if e.get("pid")]
+            fuente = "tu plantilla"
     mine = []
     for pid in lineup:
         p = by_id.get(str(pid))
@@ -95,25 +112,29 @@ def main():
             continue
         pts = wpts(p, prev)
         if pts is not None:
-            mine.append((p["nickname"], pts))
+            mine.append((p["nickname"], pts * (2 if str(pid) in caps else 1), str(pid) in caps))
     if not mine:
         print("sin datos de mi once para esa jornada")
         return
 
-    total = sum(pts for _, pts in mine)
+    total = sum(pts for _, pts, _ in mine)
     mine.sort(key=lambda x: -x[1])
-    mvp, pufo = mine[0], mine[-1]
+    mvp = mine[0]
 
     # el crack de la jornada en toda la competición
     best = max(((p, wpts(p, prev)) for p in players), key=lambda x: (x[1] or -99))
 
-    lines = [f"<b>📰 Crónica de la J{prev}</b>",
-             f"⚽ Tu once: <b>{total} puntos</b> → <b>+{fmt_m(total * 100000)}</b> de premio",
-             f"🏅 Tu MVP: <b>{mvp[0]}</b> ({mvp[1]} pts)"]
-    if pufo[1] <= 2 and pufo != mvp:
-        lines.append(f"🫠 El pufo: <b>{pufo[0]}</b> ({pufo[1]} pts)")
+    lines = [f"<b>⚡ Fantasy Studio — Crónica de la J{prev}</b>", "",
+             f"⚽ {fuente.capitalize()}: <b>{total} puntos</b> → <b>+{fmt_m(total * 100000)}</b> de premio", ""]
+    lines.extend(f"• {n}{' 👑' if cap else ''}  <b>{pts} pts</b>" for n, pts, cap in mine)
+    lines.append("")
+    lines.append(f"🏅 Tu MVP: <b>{mvp[0]}</b> ({mvp[1]} pts)")
+    flojos = [m for m in mine if m[1] <= 2]
+    if flojos and len(mine) > 1:
+        lines.append("🫠 Los que no aparecieron: " + " · ".join(f"{n} ({p})" for n, p, _ in flojos))
     if best[1] is not None:
-        lines.append(f"👑 Crack de la jornada en la liga: <b>{best[0]['nickname']}</b> ({best[1]} pts)")
+        lines.append(f"👑 Crack de la jornada en la competición: <b>{best[0]['nickname']}</b> ({best[1]} pts)")
+    lines.append("")
     lines.append('<a href="https://manugrraa.github.io/fantasy-studio/?view=liga&tab=rivales">Ver cómo queda tu liga</a>')
     msg = "\n".join(lines)
 
