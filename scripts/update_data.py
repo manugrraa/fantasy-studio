@@ -16,7 +16,7 @@ import sys
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 
 try:
     from zoneinfo import ZoneInfo
@@ -92,74 +92,95 @@ def _prev_day_value(series, today):
     return None
 
 
-def refresh_values(comp, players, marker):
-    """Valores fiables del dia pese a la CDN.
-
-    CloudFront cachea la lista de jugadores hasta 8 h e IGNORA la query en la
-    clave de cache (comprobado: _ts nuevo -> "Hit" con Age de horas), asi que
-    un runner puede recibir los valores de AYER despues de la 01:00. Tres capas:
-
-    - Dia ya confirmado (data/values_day.json): los valores de la lista se
-      pisan con los del historico -> una cache vieja no puede revertirlos.
-    - La lista trae valores nuevos respecto a ayer -> dia confirmado.
-    - Madrugada (01-07 Madrid) con lista clavada a ayer: rescate profundo por
-      el endpoint market-value de CADA jugador (ruta propia -> cache propia,
-      casi siempre Miss) tomando el valor de hoy de ahi.
-    """
-    path = os.path.join(DATA, f"history_{comp}.json")
-    hist = load(path, {})
-    today = today_int()
-
-    if marker.get(str(comp)) == today:
-        fixed = 0
-        for p in players:
-            s = hist.get(str(p["id"]))
-            if s and s[-1][0] == today and int(p.get("marketValue") or 0) != s[-1][1]:
-                p["marketValue"] = s[-1][1]
-                fixed += 1
-        if fixed:
-            print(f"[comp {comp}] valores: dia ya confirmado, lista cacheada vieja ignorada ({fixed} valores protegidos)")
-        return
-
-    diff = same = 0
-    for p in players:
-        v = int(p.get("marketValue") or 0)
-        y = _prev_day_value(hist.get(str(p["id"])), today)
-        if not v or y is None:
-            continue
-        if v != y:
-            diff += 1
-        else:
-            same += 1
-    if diff >= max(10, (diff + same) // 20):
-        marker[str(comp)] = today
-        print(f"[comp {comp}] valores: lista fresca ({diff} cambios vs ayer) -> dia {today} confirmado")
-        return
-    if not (1 <= now_madrid().hour < 7):
-        print(f"[comp {comp}] valores: lista sin cambios ({diff} vs ayer) fuera de madrugada; se deja tal cual")
-        return
-
+def deep_sync(comp, players, hist, today):
+    """La AUTORIDAD de los valores: la serie market-value POR JUGADOR (entradas
+    con fecha, cache propia casi siempre limpia). Sincroniza los ultimos 7 dias
+    del historico con la serie oficial — repara tanto cache vieja como los
+    valores PRELIMINARES que el juego publica a la 01:00 y revisa despues.
+    Devuelve cuantos jugadores tienen ya entrada de HOY."""
+    desde = int((now_madrid() - timedelta(days=7)).strftime("%Y%m%d"))
     got = [0]
+
     def one(p):
         pid = str(p["id"])
         try:
             raw = get(f"/v1/competition/{comp}/player/{pid}/market-value?x-lang=es")
-            best = None
-            for e in raw:
-                if date_to_int(e["date"]) == today:
-                    best = int(e["marketValue"])
-            if best:
-                p["marketValue"] = best
+            serie = sorted({date_to_int(e["date"]): int(e["marketValue"]) for e in raw}.items())
+            if not serie:
+                return
+            porDia = dict(hist.get(pid) or [])
+            for d, v in serie:
+                if d >= desde:
+                    porDia[d] = v
+            hist[pid] = sorted([list(x) for x in porDia.items()])
+            hoy = dict(serie).get(today)
+            if hoy:
+                p["marketValue"] = hoy
                 got[0] += 1
+            else:
+                p["marketValue"] = serie[-1][1]
         except Exception:
             pass
+
     with ThreadPoolExecutor(max_workers=8) as ex:
         list(ex.map(one, players))
-    if got[0] >= len(players) * 0.5:
-        marker[str(comp)] = today
-        print(f"[comp {comp}] valores: rescate profundo de madrugada OK ({got[0]}/{len(players)} con valor de hoy) -> dia confirmado")
-    else:
-        print(f"[comp {comp}] valores: rescate profundo insuficiente ({got[0]}/{len(players)}); se reintentara")
+    return got[0]
+
+
+def refresh_values(comp, players, marker):
+    """Valores fiables pese a la CDN (que cachea horas e ignora la query) y a
+    las REVISIONES del juego (publica preliminares a la 01:00 y los asienta
+    despues — comprobado el 31/8-1/9, cuando el candado congelo preliminares).
+
+    - Madrugada (01:00-03:00): pasada PROFUNDA con la serie oficial por jugador
+      cada >=20 min (repara ademas los ultimos 7 dias del historico). Confirma
+      el dia cuando >=50% tienen entrada de hoy.
+    - Dia sin confirmar fuera de madrugada: tambien pasada profunda (max 1/h).
+    - Resto de ciclos: los valores de la lista solo entran si son NUEVOS de
+      verdad — un valor ya visto en los ultimos 3 dias del historico es cache
+      vieja y se pisa con el valor guardado. Una revision genuina (valor nunca
+      visto) si se acepta.
+    """
+    path = os.path.join(DATA, f"history_{comp}.json")
+    hist = load(path, {})
+    today = today_int()
+    ahora = now_madrid()
+    confirmed = marker.get(str(comp)) == today
+    epoch = int(time.time())
+    last_deep = marker.get("deep_" + str(comp)) or 0
+
+    madrugada = 1 <= ahora.hour < 3
+    deep = (madrugada and epoch - last_deep >= 20 * 60) or \
+           (not confirmed and 1 <= ahora.hour < 24 and epoch - last_deep >= 60 * 60)
+    if deep:
+        con_hoy = deep_sync(comp, players, hist, today)
+        save(path, hist)
+        marker["deep_" + str(comp)] = epoch
+        if con_hoy >= len(players) * 0.5:
+            marker[str(comp)] = today
+        print(f"[comp {comp}] valores: pasada profunda oficial ({con_hoy}/{len(players)} con valor de hoy)"
+              + (" -> dia confirmado" if marker.get(str(comp)) == today else " (dia aun sin confirmar)"))
+        return
+
+    # sin pasada profunda: filtro de la lista contra el historico reciente
+    protegidos = revisados = 0
+    for p in players:
+        pid = str(p["id"])
+        v = int(p.get("marketValue") or 0)
+        s = hist.get(pid)
+        if not v or not s:
+            continue
+        stored = s[-1][1] if s[-1][0] == today else None
+        if stored is None or v == stored:
+            continue
+        recientes = {x[1] for x in s[-4:] if x[0] < today}
+        if v in recientes:
+            p["marketValue"] = stored  # valor ya visto dias atras = cache vieja
+            protegidos += 1
+        else:
+            revisados += 1  # valor nunca visto = revision del juego: se acepta
+    if protegidos or revisados:
+        print(f"[comp {comp}] valores: {protegidos} protegidos de cache vieja, {revisados} revisiones aceptadas")
 
 
 def update_history(comp, players):
