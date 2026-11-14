@@ -7,8 +7,8 @@ workers_dev = true
 binding = "SYNC"
 id = "fd1bb848f3f34d3a8ece4e5e17193a2b"
 
-# Disparo del workflow de datos a la 01:00 de Madrid (valores nuevos del juego)
-# y a la 01:32 (el parte de precios por Telegram sale a partir de la 01:25).
-# UTC: hora 23 = madrugada de verano (CEST); hora 0 = madrugada de invierno.
+# Reloj puntual del bot: cada 5 min el Worker decide (en hora de Madrid) qué
+# workflow lanzar — datos cada 15 min, resumen 8:45, sala de guerra, semanal y
+# mensual. Ver scheduled() en fantasy-proxy.js.
 [triggers]
-crons = ["5,20,32 23 * * *", "5,20,32 0 * * *"]
+crons = ["*/5 * * * *"]

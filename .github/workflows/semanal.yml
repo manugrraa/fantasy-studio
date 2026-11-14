@@ -6,6 +6,9 @@ on:
     - cron: "30 18 * * 0"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   semanal:
     runs-on: ubuntu-latest
@@ -22,3 +25,16 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FANTASY_SYNC_KEY: ${{ secrets.FANTASY_SYNC_KEY }}
         run: python scripts/semanal_telegram.py
+
+      - name: Guardar estado
+        run: |
+          git config user.name "fantasy-studio-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/semanal_state.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Sin estado nuevo"
+          else
+            git commit -m "semanal: enviado"
+            # el ciclo de datos sube cambios a menudo: traer lo último y reintentar
+            for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 5; done
+          fi

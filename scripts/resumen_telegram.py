@@ -1,115 +1,43 @@
 #!/usr/bin/env python3
-"""Resumen diario del mercado Fantasy por Telegram.
+"""Resumen diario del mercado Fantasy por Telegram (por la mañana).
 
-Analiza los datos ya descargados en data/ (no llama a la API del Fantasy) y
-envia un mensaje con lo mas relevante del dia: subidas, bajadas, chollos y
-jornada. Solo necesita UN secret del repositorio:
-  TELEGRAM_BOT_TOKEN  (de @BotFather)
-El chat id se detecta solo: la primera vez, el dueno le escribe un "hola" al
-bot y el script lo descubre via getUpdates y lo guarda en
-data/telegram_chat.json (el workflow lo commitea). TELEGRAM_CHAT_ID sigue
-funcionando como override opcional. Sin token, imprime el mensaje y sale.
+Analiza los datos ya descargados en data/ y su copia personal en la nube:
+lo suyo (dinero, objetivos, su plantilla con el balance del día, vigilados) y
+el mercado de cada competición (suben, bajan, chollos).
+
+Una sola vez al día (data/resumen_state.json): pueden dispararlo a la vez el
+reloj de Cloudflare y el de GitHub. TELEGRAM_BOT_TOKEN=dry imprime sin enviar.
 """
-import json
-import os
-import sys
-import urllib.request
-import urllib.parse
+import tg
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA = os.path.join(ROOT, "data")
-COMPS = [("2", "LaLiga Hypermotion"), ("1", "LaLiga EA Sports")]
-
-
-def load(name, default):
-    try:
-        with open(os.path.join(DATA, name), encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return default
-
-
-def fmt_m(n):
-    n = int(n)
-    a = abs(n)
-    if a >= 1_000_000:
-        s = f"{n/1_000_000:.1f}".replace(".", ",").rstrip("0").rstrip(",")
-        return s + "M"
-    if a >= 1_000:
-        return f"{round(n/1000)}K"
-    return str(n)
-
-
-def sign(n):
-    return ("+" if n > 0 else "") + fmt_m(n)
-
-
-def madrid_now():
-    from datetime import datetime, timezone, timedelta
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo("Europe/Madrid"))
-    except Exception:  # sin tzdata (Windows local): aproximamos con UTC+2
-        return datetime.now(timezone(timedelta(hours=2)))
-
-
-def today_madrid_int():
-    try:
-        return int(madrid_now().strftime("%Y%m%d"))
-    except Exception:
-        return None
+COMPS = [("2", "LaLiga Hypermotion", "🔵"), ("1", "LaLiga EA Sports", "🔴")]
 
 
 def values_fresh(comp):
-    """True si el historico ya tiene el valor de HOY (el juego los cambia de madrugada)."""
-    today = today_madrid_int()
-    if not today:
-        return True
-    hist = load(f"history_{comp}.json", {})
-    for series in list(hist.values())[:80]:
-        if series and series[-1][0] >= today:
-            return True
-    return False
+    """True si el histórico ya tiene el valor de HOY (el juego los cambia a la 01:00)."""
+    today = tg.today_int()
+    hist = tg.load(f"history_{comp}.json", {})
+    return any(s and s[-1][0] >= today for s in list(hist.values())[:80])
 
 
-def discover_chat(token):
-    """Chat id: primero el guardado; si no, getUpdates (el dueno saluda al bot una vez)."""
-    saved = load("telegram_chat.json", {})
-    if saved.get("chat_id"):
-        return str(saved["chat_id"])
-    try:
-        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getUpdates", timeout=30) as r:
-            data = json.load(r)
-        for upd in reversed(data.get("result", [])):
-            chat = ((upd.get("message") or upd.get("edited_message") or {}).get("chat")) or {}
-            if chat.get("id"):
-                cid = str(chat["id"])
-                with open(os.path.join(DATA, "telegram_chat.json"), "w", encoding="utf-8") as f:
-                    json.dump({"chat_id": cid, "name": chat.get("first_name") or chat.get("title") or ""}, f)
-                print("chat descubierto y guardado:", cid)
-                return cid
-    except Exception as e:
-        print("getUpdates fallo:", e, file=sys.stderr)
-    return None
-
-
-def analyze(comp):
-    players = load(f"players_{comp}.json", [])
-    hist = load(f"history_{comp}.json", {})
-    rows = []
+def deltas_hoy(comp):
+    """pid -> (jugador, cambio de hoy, valor)."""
+    players = tg.load(f"players_{comp}.json", [])
+    hist = tg.load(f"history_{comp}.json", {})
+    out = {}
     for p in players:
         h = hist.get(str(p["id"]))
-        if not h or len(h) < 2:
-            continue
-        d1 = h[-1][1] - h[-2][1]
-        rows.append((p, d1))
+        if h and len(h) >= 2:
+            out[str(p["id"])] = (p, h[-1][1] - h[-2][1], h[-1][1])
+    return out
+
+
+def mercado(comp, dmap):
+    rows = [(p, d) for p, d, _ in dmap.values()]
     ups = sorted([r for r in rows if r[1] > 0], key=lambda r: -r[1])[:5]
     downs = sorted([r for r in rows if r[1] < 0], key=lambda r: r[1])[:5]
-
-    # chollos: rendimiento por millon entre los que juegan
     cheap = []
-    for p in players:
-        v = int(p.get("marketValue") or 0)
+    for p, _, v in dmap.values():
         pts = p.get("points") or 0
         if v > 0 and pts >= 10 and p.get("playerStatus") == "ok":
             cheap.append((p, pts / (v / 1_000_000)))
@@ -117,155 +45,74 @@ def analyze(comp):
     return ups, downs, cheap[:3]
 
 
-def fetch_personal():
-    """Datos personales (plantilla, vigilados, dinero) desde la nube del Worker."""
-    key = os.environ.get("FANTASY_SYNC_KEY", "").strip()
-    if not key:
-        return None
-    try:
-        url = f"https://fantasy-proxy.manugrraa.workers.dev/sync/{key}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; FantasyStudio/1.0)"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.load(r)
-    except Exception as e:
-        print("sync no disponible:", e, file=sys.stderr)
-        return None
-
-
-def player_delta(comp, pid, players_by_id, hist):
-    p = players_by_id.get(str(pid))
-    h = hist.get(str(pid))
-    if not p or not h or len(h) < 2:
-        return None
-    return p, h[-1][1] - h[-2][1], h[-1][1]
-
-
-def personal_section(personal):
-    """Sección personalizada: SOLO vigilados (no favoritos) + plantilla + dinero."""
-    if not personal:
-        return []
+def lo_tuyo(pers, dmap):
     comp = "2"
-    players = load(f"players_{comp}.json", [])
-    by_id = {str(p["id"]): p for p in players}
-    hist = load(f"history_{comp}.json", {})
-    out = []
-
-    money = ((personal.get("money") or {}).get(comp))
-    squad = (personal.get("squad") or {}).get(comp) or []
-    watch = (personal.get("watch") or {}).get(comp) or []
-
-    # plantilla: subidas y bajadas POR SEPARADO y el balance total del dia
-    sq_up, sq_down, sq_total, sq_known = [], [], 0, 0
+    money = (pers.get("money") or {}).get(comp)
+    squad = [e for e in (pers.get("squad") or {}).get(comp) or [] if e.get("pid") and not e.get("custom")]
+    watch = [w for w in (pers.get("watch") or {}).get(comp) or [] if w.get("pid")]
+    L = []
+    ups, downs, total, conocidos = [], [], 0, 0
     for e in squad:
-        if e.get("custom") or not e.get("pid"):
-            continue
-        r = player_delta(comp, e["pid"], by_id, hist)
+        r = dmap.get(str(e["pid"]))
         if not r:
             continue
-        p, d1, _ = r
-        sq_known += 1
-        sq_total += d1
-        if d1 > 0:
-            sq_up.append((p, d1))
-        elif d1 < 0:
-            sq_down.append((p, d1))
-    sq_up.sort(key=lambda x: -x[1])
-    sq_down.sort(key=lambda x: x[1])
-    w_lines = []
-    hits = []
+        p, d, _ = r
+        conocidos += 1
+        total += d
+        (ups if d > 0 else downs if d < 0 else []).append((p, d))
+    hits, vig = [], []
     for w in watch:
-        if not w.get("pid"):
-            continue
-        r = player_delta(comp, w["pid"], by_id, hist)
+        r = dmap.get(str(w["pid"]))
         if not r:
             continue
-        p, d1, val = r
-        w_lines.append(f"{p['nickname']} {sign(d1) if d1 else '='}")
-        target = w.get("target")
-        if target:
-            reached = val >= target if w.get("dir") == "above" else val <= target
-            if reached:
-                hits.append(f"{p['nickname']} ({fmt_m(val)})")
-
-    if money is not None or sq_known or w_lines or hits:
-        out.append("")
-        out.append("<b>⭐ Lo tuyo</b>" + (f" · dinero: <b>{fmt_m(money)}</b>" if money is not None else ""))
-        if hits:
-            out.append("🎯 <b>Objetivo alcanzado:</b> " + " · ".join(hits))
-        if sq_known:
-            balance = "sin cambios" if sq_total == 0 else f"<b>{sign(sq_total)}</b>"
-            emoji = "🟢" if sq_total > 0 else ("🔴" if sq_total < 0 else "⚪")
-            out.append(f"👥 Tu plantilla hoy: {emoji} {balance}")
-            if sq_up:
-                out.append("")
-                out.append("📈 <b>Suben</b>")
-                out.extend(f"• {p['nickname']}  <b>{sign(d)}</b>" for p, d in sq_up)
-            if sq_down:
-                out.append("")
-                out.append("📉 <b>Bajan</b>")
-                out.extend(f"• {p['nickname']}  <b>{sign(d)}</b>" for p, d in sq_down)
-        if w_lines:
-            out.append("👁 <b>Tus vigilados:</b> " + " · ".join(w_lines[:10]))
-    return out
+        p, d, val = r
+        vig.append(f"{p['nickname']}  <b>{tg.sign(d) if d else '='}</b>")
+        t = w.get("target")
+        if t and (val >= t if w.get("dir") == "above" else val <= t):
+            hits.append(f"{p['nickname']}: {tg.fmt_m(val)} (objetivo {tg.fmt_m(t)})")
+    if money is None and not conocidos and not vig:
+        return L
+    L += ["", "<b>⭐ Lo tuyo</b>" + (f" · dinero <b>{tg.fmt_m(money)}</b>" if money is not None else "")]
+    L += tg.seccion("🎯 <b>Objetivo alcanzado</b>", hits)
+    if conocidos:
+        emoji = "🟢" if total > 0 else ("🔴" if total < 0 else "⚪")
+        L += ["", f"👥 Tu plantilla hoy: {emoji} <b>{tg.sign(total) if total else 'sin cambios'}</b>"]
+        L += tg.seccion("📈 <b>Suben</b>", [f"{p['nickname']}  <b>{tg.sign(d)}</b>" for p, d in sorted(ups, key=lambda x: -x[1])])
+        L += tg.seccion("📉 <b>Bajan</b>", [f"{p['nickname']}  <b>{tg.sign(d)}</b>" for p, d in sorted(downs, key=lambda x: x[1])])
+    L += tg.seccion("👁 <b>Tus vigilados</b>", vig)
+    return L
 
 
 def main():
-    meta = load("meta.json", {})
-    try:
-        now = madrid_now()
-        DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-        MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
-                 "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
-        hoy = f"{DIAS[now.weekday()].capitalize()} {now.day} de {MESES[now.month - 1]}"
-    except Exception:
-        hoy = ""
-    lines = [f"<b>⚡ Fantasy Studio — {hoy}</b>" if hoy else "<b>⚡ Fantasy Studio — resumen del día</b>"]
+    hoy = tg.today_int()
+    if tg.ya_enviado("resumen_state.json", "dia", hoy):
+        print("el resumen de hoy ya se envió")
+        return
+    meta = tg.load("meta.json", {})
+    L = [tg.titulo("Resumen del " + tg.fecha_larga())]
     if not values_fresh("2"):
-        lines.append("⏳ <i>Ojo: los valores de hoy aún no se habían publicado al enviar esto.</i>")
+        L += ["", "⏳ <i>Los valores de hoy aún no se habían publicado al preparar esto.</i>"]
 
-    lines.extend(personal_section(fetch_personal()))
+    dmaps = {comp: deltas_hoy(comp) for comp, _, _ in COMPS}
+    pers = tg.personal()
+    if pers:
+        L += lo_tuyo(pers, dmaps["2"])
 
-    for comp, label in COMPS:
+    for comp, label, icono in COMPS:
         week = (meta.get("comps") or {}).get(comp) or {}
         wk = week.get("weekNumber")
         live = " · <b>EN JUEGO</b>" if week.get("isLive") else ""
-        ups, downs, cheap = analyze(comp)
-        lines.append("")
-        lines.append(f"<b>{'🔵' if comp == '2' else '🔴'} {label}</b>" + (f" · J{wk}{live}" if wk else ""))
-        if ups:
-            lines.append("📈 <b>Suben:</b> " + " · ".join(f"{p['nickname']} {sign(d)}" for p, d in ups))
-        if downs:
-            lines.append("📉 <b>Caen:</b> " + " · ".join(f"{p['nickname']} {sign(d)}" for p, d in downs))
-        if cheap and comp == "2":
-            lines.append("💎 <b>Chollos (pts/M€):</b> " + " · ".join(
-                f"{p['nickname']} ({v:.1f})".replace(".", ",") for p, v in cheap))
-
-    lines.append("")
-    lines.append('<a href="https://manugrraa.github.io/fantasy-studio/">Abrir Fantasy Studio</a>')
-    msg = "\n".join(lines)
-
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        out = "(sin TELEGRAM_BOT_TOKEN; mensaje que se habria enviado:)\n\n" + msg
-        sys.stdout.buffer.write(out.encode("utf-8", "replace"))
-        return
-
-    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip() or discover_chat(token)
-    if not chat:
-        print("Aun no se conoce el chat: escribele cualquier mensaje al bot en "
-              "Telegram y este workflow lo detectara en la proxima ejecucion.")
-        return
-
-    body = urllib.parse.urlencode({
-        "chat_id": chat, "text": msg, "parse_mode": "HTML",
-        "disable_web_page_preview": "true",
-    }).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        ok = json.load(r).get("ok")
-    print("enviado" if ok else "fallo al enviar", file=sys.stderr if not ok else sys.stdout)
-    if not ok:
-        sys.exit(1)
+        ups, downs, cheap = mercado(comp, dmaps[comp])
+        L += ["", "", f"{icono} <b>{label}</b>" + (f" · J{wk}{live}" if wk else "")]
+        L += tg.seccion("📈 <b>Top subidas</b>", [f"{p['nickname']}  <b>{tg.sign(d)}</b>" for p, d in ups])
+        L += tg.seccion("📉 <b>Top bajadas</b>", [f"{p['nickname']}  <b>{tg.sign(d)}</b>" for p, d in downs])
+        if comp == "2":
+            L += tg.seccion("💎 <b>Chollos</b> (puntos por millón)",
+                            [f"{p['nickname']}  <b>{v:.1f}</b>".replace(".", ",") for p, v in cheap])
+    L += tg.pie()
+    if tg.enviar(L):
+        tg.marcar_enviado("resumen_state.json", "dia", hoy)
+        print("resumen enviado")
 
 
 if __name__ == "__main__":

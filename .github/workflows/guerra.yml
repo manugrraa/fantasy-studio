@@ -44,5 +44,6 @@ jobs:
             echo "Sin estado nuevo"
           else
             git commit -m "guerra: J avisada"
-            git push
+            # el ciclo de datos sube cambios a menudo: traer lo último y reintentar
+            for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 5; done
           fi

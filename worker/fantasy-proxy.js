@@ -109,25 +109,38 @@ async function handlePair(request, url, env, cors, originOk){
 
 export default {
   /**
-   * Cron del Worker (fiable, a diferencia del de GitHub): a la hora en que el
-   * juego publica los valores nuevos (01:00 de Madrid) lanza el workflow de
-   * datos vía workflow_dispatch. Los crons van en UTC en wrangler.toml:
-   * 23h UTC = 01:00 Madrid en verano; 0h UTC = 01:00 Madrid en invierno.
-   * Necesita el secret GH_TOKEN (npx wrangler secret put GH_TOKEN, token con
-   * scopes repo+workflow). Sin el secret no hace nada.
+   * RELOJ PUNTUAL de todo el bot (el de GitHub llega con 6 h de retraso de
+   * mediana: el «resumen de las 8:45» se recibía hacia las 15:00).
+   * Un único cron cada 5 min (wrangler.toml) y aquí se decide, en hora de
+   * Madrid (cambio de hora incluido), qué workflow lanzar. Los crons de GitHub
+   * siguen de respaldo: cada script tiene su guarda de «una sola vez».
+   * Necesita el secret GH_TOKEN (scopes repo+workflow); sin él no hace nada.
    */
   async scheduled(event, env, ctx) {
     if (!env.GH_TOKEN) return;
-    await fetch("https://api.github.com/repos/manugrraa/fantasy-studio/actions/workflows/datos.yml/dispatches", {
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer " + env.GH_TOKEN,
-        "Accept": "application/vnd.github+json",
-        "Content-Type": "application/json",
-        "User-Agent": "FantasyStudio-cron",
-      },
-      body: JSON.stringify({ ref: "main" }),
-    });
+    const t = new Date(event.scheduledTime || Date.now());
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit", day: "2-digit", weekday: "short", hourCycle: "h23",
+    }).formatToParts(t).map(x => [x.type, x.value]));
+    const hh = +p.hour, mm = +p.minute, dia = +p.day, dow = p.weekday; // dow: Mon..Sun
+    const at = (h, m) => hh === h && mm === m;
+    const lanzar = [];
+    if (mm % 15 === 5) lanzar.push("datos.yml");                 // xx:05/20/35/50 (01:05 valores, 01:35 parte)
+    if (at(8, 45)) lanzar.push("resumen.yml");                   // resumen de la mañana
+    if (at(9, 15) || at(17, 15) || at(20, 15)) lanzar.push("guerra.yml"); // sala de guerra y crónica
+    if (dow === "Sun" && at(20, 30)) lanzar.push("semanal.yml"); // balance semanal
+    if (dia === 1 && at(10, 0)) lanzar.push("mensual.yml");      // resumen mensual
+    ctx.waitUntil(Promise.all(lanzar.map(wf =>
+      fetch(`https://api.github.com/repos/manugrraa/fantasy-studio/actions/workflows/${wf}/dispatches`, {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + env.GH_TOKEN,
+          "Accept": "application/vnd.github+json",
+          "Content-Type": "application/json",
+          "User-Agent": "FantasyStudio-cron",
+        },
+        body: JSON.stringify({ ref: "main" }),
+      }).catch(() => null))));
   },
 
   async fetch(request, env) {

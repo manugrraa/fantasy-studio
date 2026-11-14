@@ -14,6 +14,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
+import tg
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
 UA = {"User-Agent": "Mozilla/5.0 (compatible; FantasyStudio/1.0)"}
@@ -53,10 +55,6 @@ def main():
     key = os.environ.get("FANTASY_SYNC_KEY", "").strip()
     if not token or not key:
         print("sin token o sync key")
-        return
-    chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip() or str(load("telegram_chat.json", {}).get("chat_id") or "")
-    if not chat:
-        print("sin chat")
         return
 
     meta = load("meta.json", {})
@@ -134,18 +132,20 @@ def main():
         score = form3(p) * 2 + (p.get("averagePoints") or 0) + bonus
         cands.append((score, p, riv_txt))
 
-    lines = [f"<b>⚔️ Sala de guerra — J{wk}</b>",
-             f"🕗 Arranca {start.strftime('%A %H:%M').replace('Monday','lunes').replace('Tuesday','martes').replace('Wednesday','miércoles').replace('Thursday','jueves').replace('Friday','viernes').replace('Saturday','sábado').replace('Sunday','domingo')}"]
-    if bajas:
-        lines.append("🚑 <b>Ojo, no alinees:</b> " + " · ".join(bajas))
+    POS = {"1": "POR", "2": "DEF", "3": "CEN", "4": "DEL"}
+    dia = tg.DIAS[start.weekday()] if hasattr(tg, "DIAS") else ""
+    L = [tg.titulo(f"Sala de guerra · J{wk}"), "",
+         f"🕗 La jornada arranca el <b>{dia} a las {start.strftime('%H:%M')}</b>"]
+    L += tg.seccion("🚑 <b>Ojo, no alinees</b>", bajas)
     if cands:
         cands.sort(key=lambda x: -x[0])
-        POS = {"1": "POR", "2": "DEF", "3": "CEN", "4": "DEL"}
-        top = [c for c in cands if str(c[1].get("positionId")) in POS][:11]
-        lines.append("📋 <b>Tus mejores cartas hoy:</b>")
-        for score, p, riv_txt in top[:6]:
-            score_txt = f"{score:.1f}".replace(".", ",")
-            lines.append(f"  {POS.get(str(p['positionId']), '?')} {p['nickname']} ({score_txt}) {riv_txt}")
+        filas = []
+        for score, p, riv_txt in cands:
+            if str(p.get("positionId")) not in POS:
+                continue
+            nota = f"{score:.1f}".replace(".", ",")
+            filas.append(f"{POS[str(p['positionId'])]} · {p['nickname']}  <b>{nota}</b>" + (f"  {riv_txt}" if riv_txt else ""))
+        L += tg.seccion("📋 <b>Tus cartas, de mejor a peor</b> (forma + media + rival)", filas)
 
     # vigilados a punto de objetivo
     hist = load(f"history_{COMP}.json", {})
@@ -158,33 +158,15 @@ def main():
         val = h[-1][1]
         dist = (target - val) / target if w.get("dir") == "above" else (val - target) / target
         if 0 < dist <= 0.05:
-            close.append(f"{p['nickname']} a {dist*100:.1f} % de {fmt_m(target)}".replace(".", ","))
-    if close:
-        lines.append("🎯 <b>Objetivos a punto:</b> " + " · ".join(close))
+            close.append(f"{p['nickname']}: a un {dist*100:.1f} % de {fmt_m(target)}".replace(".", ","))
+    L += tg.seccion("🎯 <b>Objetivos a punto</b>", close)
+    L += tg.pie("Abrir el mercado antes del cierre", tg.APP_URL + "?view=liga&tab=mercado")
 
-    lines.append('<a href="https://manugrraa.github.io/fantasy-studio/?view=liga&tab=mercado">Abrir el mercado antes del cierre</a>')
-
-    if token == "dry":
-        sys.stdout.buffer.write(("\n".join(lines) + "\n").encode("utf-8", "replace"))
-        return
-
-    body = urllib.parse.urlencode({
-        "chat_id": chat, "text": "\n".join(lines), "parse_mode": "HTML", "disable_web_page_preview": "true",
-    }).encode()
-    try:
-        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body, headers=UA)
-        with urllib.request.urlopen(req, timeout=30) as r:
-            ok = json.load(r).get("ok")
-    except Exception as e:
-        print("fallo al enviar:", e, file=sys.stderr)
-        sys.exit(1)
-    if ok:
-        state[COMP] = wk
-        save("warroom_state.json", state)
+    if tg.enviar(L):
+        if not tg.es_prueba():
+            state[COMP] = wk
+            save("warroom_state.json", state)
         print(f"sala de guerra J{wk} enviada")
-    else:
-        print("fallo al enviar")
-        sys.exit(1)
 
 
 if __name__ == "__main__":

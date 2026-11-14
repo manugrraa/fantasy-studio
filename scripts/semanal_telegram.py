@@ -10,6 +10,8 @@ import os
 import sys
 import urllib.parse
 import urllib.request
+
+import tg
 from datetime import datetime, timezone, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -86,7 +88,11 @@ def main():
     today = int(now.strftime("%Y%m%d"))
     week_ago = int((now - timedelta(days=7)).strftime("%Y%m%d"))
 
-    lines = [f"<b>📊 Fantasy Studio — balance semanal</b>"]
+    semana = int(now.strftime("%G%V"))  # año + semana ISO
+    if tg.ya_enviado("semanal_state.json", "semana", semana):
+        print("el balance de esta semana ya se envió")
+        return
+    lines = [tg.titulo("Balance semanal"), ""]
 
     # patrimonio: del diario subido a la nube
     wealth = (personal.get("wealth") or {}).get(COMP) or []
@@ -121,10 +127,10 @@ def main():
         (aciertos if diff > 0 else errores).append((players[pid]["nickname"], diff))
     if aciertos:
         aciertos.sort(key=lambda x: -x[1])
-        lines.append("✅ <b>Fichajes acertados:</b> " + " · ".join(f"{n} {sign(d)}" for n, d in aciertos[:4]))
+        lines += tg.seccion("✅ <b>Fichajes acertados</b>", [f"{n}  <b>{sign(d)}</b>" for n, d in aciertos])
     if errores:
         errores.sort(key=lambda x: x[1])
-        lines.append("❌ <b>De momento en rojo:</b> " + " · ".join(f"{n} {sign(d)}" for n, d in errores[:3]))
+        lines += tg.seccion("❌ <b>De momento en rojo</b>", [f"{n}  <b>{sign(d)}</b>" for n, d in errores])
 
     # nota de entrenador (histórico completo de ventas)
     all_sells = [m for m in moves if m.get("type") == "sell" and m.get("pid")]
@@ -143,6 +149,7 @@ def main():
                 t_n += 1
         timing = t_sum / t_n if t_n else 0.7
         nota = round(min(10, max(0, ok_pct * 6 + timing * 4)), 1)
+        lines.append("")
         lines.append(f"🎓 Nota de entrenador: <b>{str(nota).replace('.', ',')}</b> ({round(ok_pct*100)} % ventas en verde)")
 
     # plan para la próxima semana
@@ -161,27 +168,12 @@ def main():
         if p and p.get("playerStatus") in ("injured", "suspended"):
             plan.append(f"decide qué hacer con {p['nickname']} (baja)")
     if plan:
-        lines.append("🗓 <b>Para la semana que entra:</b> " + " · ".join(plan[:4]))
+        lines += tg.seccion("🗓 <b>Para la semana que entra</b>", plan)
 
-    lines.append('<a href="https://manugrraa.github.io/fantasy-studio/">Abrir Fantasy Studio</a>')
-    msg = "\n".join(lines)
-
-    if token == "dry":
-        sys.stdout.buffer.write((msg + "\n").encode("utf-8", "replace"))
-        return
-    body = urllib.parse.urlencode({
-        "chat_id": chat, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": "true",
-    }).encode()
-    try:
-        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body, headers=UA)
-        with urllib.request.urlopen(req, timeout=30) as r:
-            ok = json.load(r).get("ok")
-    except Exception as e:
-        print("fallo al enviar:", e, file=sys.stderr)
-        sys.exit(1)
-    print("resumen semanal enviado" if ok else "fallo")
-    if not ok:
-        sys.exit(1)
+    lines += tg.pie()
+    if tg.enviar(lines):
+        tg.marcar_enviado("semanal_state.json", "semana", semana)
+        print("balance semanal enviado")
 
 
 if __name__ == "__main__":

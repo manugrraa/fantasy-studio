@@ -27,14 +27,16 @@ jobs:
           FANTASY_SYNC_KEY: ${{ secrets.FANTASY_SYNC_KEY }}
         run: python scripts/resumen_telegram.py
 
-      - name: Guardar chat detectado
+      - name: Guardar estado
         run: |
           git config user.name "fantasy-studio-bot"
           git config user.email "actions@users.noreply.github.com"
+          git add data/resumen_state.json 2>/dev/null || true
           git add data/telegram_chat.json 2>/dev/null || true
           if git diff --cached --quiet; then
-            echo "Sin chat nuevo que guardar"
+            echo "Sin estado nuevo"
           else
-            git commit -m "telegram: chat detectado"
-            git push
+            git commit -m "resumen: enviado"
+            # el ciclo de datos sube cambios a menudo: traer lo último y reintentar
+            for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 5; done
           fi
