@@ -1460,9 +1460,51 @@ function applyThemeBtn(){
   document.getElementById("btnTheme").innerHTML = document.documentElement.dataset.theme === "light" ? IC.moon : IC.sun;
 }
 
+/* Los repintados automáticos (datos nuevos, nube, liga) no deben borrar lo
+   que el usuario está escribiendo ni plegar lo que tenía desplegado: antes de
+   repintar se guarda y después se devuelve, si sigue en la misma pantalla. */
+function captureForm(main){
+  const snap = { view: main.dataset.view, vals: {}, open: {}, focus: null };
+  main.querySelectorAll("input[id], textarea[id], select[id]").forEach(el => {
+    if (el.type === "checkbox" || el.type === "radio") {
+      if (el.checked !== el.defaultChecked) snap.vals[el.id] = { checked: el.checked };
+    } else if (el.tagName === "SELECT") {
+      const def = [...el.options].find(o => o.defaultSelected)?.value ?? el.options[0]?.value;
+      if (el.value !== def) snap.vals[el.id] = { value: el.value };
+    } else if (el.value !== el.defaultValue) {
+      snap.vals[el.id] = { value: el.value };
+    }
+  });
+  main.querySelectorAll("details").forEach((d, i) => {
+    snap.open[d.id || (d.querySelector("summary")?.textContent || "").trim().slice(0, 60) || "d" + i] = d.open;
+  });
+  const a = document.activeElement;
+  if (a && a.id && main.contains(a)) snap.focus = { id: a.id, s: a.selectionStart, e: a.selectionEnd };
+  return snap;
+}
+function restoreForm(main, snap){
+  if (!snap || snap.view !== state.view) return;
+  for (const [id, v] of Object.entries(snap.vals)) {
+    const el = document.getElementById(id);
+    if (!el || !main.contains(el)) continue;
+    if ("checked" in v) el.checked = v.checked; else el.value = v.value;
+  }
+  main.querySelectorAll("details").forEach((d, i) => {
+    const k = d.id || (d.querySelector("summary")?.textContent || "").trim().slice(0, 60) || "d" + i;
+    if (k in snap.open) d.open = snap.open[k];
+  });
+  if (snap.focus) {
+    const el = document.getElementById(snap.focus.id);
+    if (el && main.contains(el)) {
+      el.focus({ preventScroll: true });
+      try { if (snap.focus.s != null) el.setSelectionRange(snap.focus.s, snap.focus.e); } catch(e) {}
+    }
+  }
+}
 function render(){
   renderNav();
   const main = document.getElementById("main");
+  const snap = captureForm(main);
   if (state.view === "resumen")    main.innerHTML = viewResumen();
   if (state.view === "mercado")    main.innerHTML = viewMercado();
   if (state.view === "liga")       main.innerHTML = viewLiga();
@@ -1471,6 +1513,8 @@ function render(){
   if (state.view === "calendario") main.innerHTML = viewCalendario();
   if (state.view === "plantilla")  main.innerHTML = viewPlantilla();
   if (state.view === "movs")       main.innerHTML = viewMovs();
+  main.dataset.view = state.view;
+  restoreForm(main, snap);
   afterRender();
 }
 function afterRender(){
@@ -2716,13 +2760,19 @@ async function shareText(text){
   try { await navigator.clipboard.writeText(text); toast("Texto copiado: pégalo en WhatsApp", "ok"); }
   catch(e) { prompt("Copia el texto:", text); }
 }
+/* HTML de la app -> texto de WhatsApp: <b> pasa a *negrita* y se quitan etiquetas y entidades */
+function htmlToWhats(h){
+  const t = document.createElement("textarea");
+  t.innerHTML = String(h).replace(/<\/?b>/g, "*").replace(/<br\s*\/?>/g, "\n").replace(/<[^>]+>/g, "");
+  return t.value;
+}
 function sharePrensaText(){
   const P = window._lastPrensa;
   if (!P) { toast("Abre la Prensa primero", "err"); return; }
   shareText([
     "📰 *LA PRENSA DE LA LIGA* — Fantasy Studio",
     "",
-    ...P.heads,
+    ...P.heads.map(htmlToWhats),
     "",
     "*Estilos:*",
     ...P.styles,
@@ -3928,6 +3978,8 @@ async function fantasyRefresh(){
     } catch(e) { /* probamos la otra política */ }
   }
   saveAuth(null);
+  toast("Tu sesión de LaLiga ha caducado. Vuelve a entrar en Mi Liga (o vincula este aparato desde otro con sesión).", "err");
+  if (state.view === "liga") setTimeout(render, 50);
   throw new Error("No se pudo renovar la sesión, vuelve a iniciar sesión");
 }
 
@@ -3991,8 +4043,11 @@ async function loadLiga(force){
     }
   };
 
-  await step("me", () => authFetch("/api/v4/user/me?x-lang=es"));
-  await step("leagues", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/leagues?x-lang=es`)));
+  // ronda 1: perfil y ligas a la vez
+  await Promise.all([
+    step("me", () => authFetch("/api/v4/user/me?x-lang=es")),
+    step("leagues", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/leagues?x-lang=es`))),
+  ]);
   const leagues = out.leagues || [];
   let sel = state.myLeague[c];
   if (!sel || !leagues.some(l => String(l.id) === String(sel.leagueId))) {
@@ -4007,7 +4062,9 @@ async function loadLiga(force){
     state.myLeague[c] = sel;
     localStorage.setItem(LS.league, JSON.stringify(state.myLeague));
 
-    await step("standing", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/standing?x-lang=es`)));
+    // ronda 2: si ya sé mi equipo, la clasificación va junto a todo lo demás
+    const pStanding = step("standing", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/standing?x-lang=es`)));
+    if (!sel.teamId) await pStanding;
 
     // si la liga no traía mi teamId, lo buscamos en la clasificación por el manager
     if (!sel.teamId && out.standing && out.me) {
@@ -4021,9 +4078,15 @@ async function loadLiga(force){
       if (rid) { sel.teamId = String(rid); localStorage.setItem(LS.league, JSON.stringify(state.myLeague)); }
     }
 
-    await step("market", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/league/${sel.leagueId}/market?x-lang=es`)));
+    // mercado, actividad, dinero y equipo no dependen entre sí: a la vez
     const prevFirstAct = st.data[c] ? String(unwrapList(st.data[c].activity)[0]?.id ?? "") : null;
-    await step("activity", () => authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/activity/0?x-lang=es`));
+    await Promise.all([
+      step("market", async () => unwrapList(await authFetch(`/api/v1/competition/${c}/league/${sel.leagueId}/market?x-lang=es`))),
+      step("activity", () => authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/activity/0?x-lang=es`)),
+      sel.teamId ? step("money", () => authFetch(`/api/v1/competition/${c}/teams/${sel.teamId}/money?x-lang=es`)) : null,
+      sel.teamId ? step("team", () => authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/teams/${sel.teamId}?x-lang=es`)) : null,
+      pStanding,
+    ]);
     // si hay operaciones nuevas en la liga (compras/ventas/cláusulas), las
     // plantillas cacheadas quedan viejas: se invalidan y se recargan solas
     const newFirstAct = String(unwrapList(out.activity)[0]?.id ?? "");
@@ -4032,9 +4095,12 @@ async function loadLiga(force){
       state.actFull[c] = null;
       toast("Operaciones nuevas en tu liga: plantillas actualizadas", "ok");
     }
-    if (sel.teamId) {
-      await step("money", () => authFetch(`/api/v1/competition/${c}/teams/${sel.teamId}/money?x-lang=es`));
-      await step("team", () => authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/teams/${sel.teamId}?x-lang=es`));
+    // (si el teamId solo se conoció por la clasificación, dinero y equipo van ahora)
+    if (sel.teamId && !out.money && !out.team) {
+      await Promise.all([
+        step("money", () => authFetch(`/api/v1/competition/${c}/teams/${sel.teamId}/money?x-lang=es`)),
+        step("team", () => authFetch(`/api/v1/competition/${c}/leagues/${sel.leagueId}/teams/${sel.teamId}?x-lang=es`)),
+      ]);
     }
   }
   st.data[c] = out;
@@ -6149,7 +6215,7 @@ function ligaTabPrensa(c, d){
   if (monje && monje.nBuys + monje.nSells <= 2) heads.push(["🧘", `<b>${name(monje)}</b> medita: solo ${monje.nBuys + monje.nSells} ${monje.nBuys + monje.nSells === 1 ? "operación" : "operaciones"}. ¿Estrategia o siesta?`]);
 
   window._lastPrensa = {
-    heads: heads.map(([e, t]) => e + " " + t.replace(/<[^>]+>/g, "")),
+    heads: heads.map(([e, t]) => e + " " + t), // HTML: htmlToWhats lo convierte al compartir
     styles: rows.map(r => `${r.pos}. ${r.manager || r.name}${r.isMe ? " (yo)" : ""} — ${managerStyle(c, r.tid, r, avgOps)} (${r.nBuys + r.nSells} ops)`),
   };
   return `
