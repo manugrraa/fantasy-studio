@@ -3642,20 +3642,37 @@ async function pkcePair(){
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
   return { verifier, challenge: b64url(new Uint8Array(digest)) };
 }
-async function buildSocialUrl(){
+/* Intento de login pendiente: se crea UNA vez y se reutiliza hasta 10 min.
+   (Antes cada repintado de la pantalla generaba un verificador nuevo: al volver
+   de Safari, el enlace pegado ya no casaba y LaLiga lo rechazaba.) */
+const LOGIN_TTL = 10 * 60000;
+function pendingLogin(){
+  try {
+    const a = JSON.parse(localStorage.getItem("fs_pkce") || "null");
+    if (a?.verifier && a.challenge && a.state && Date.now() - a.at < LOGIN_TTL) return a;
+  } catch(e) {}
+  return null;
+}
+async function loginAttempt(fresh){
+  const ya = !fresh && pendingLogin();
+  if (ya) return ya;
   const { verifier, challenge } = await pkcePair();
-  const stt = b64url(crypto.getRandomValues(new Uint8Array(12)));
+  const a = { verifier, challenge, state: b64url(crypto.getRandomValues(new Uint8Array(16))), at: Date.now(), opened: false };
   // localStorage y no sessionStorage: en iOS, al saltar a Safari para el login,
   // el sistema puede congelar la app instalada y perder la sesión temporal
-  localStorage.setItem("fs_pkce", JSON.stringify({ verifier, state: stt, at: Date.now() }));
+  localStorage.setItem("fs_pkce", JSON.stringify(a));
+  return a;
+}
+function socialUrlFor(a){
   const params = new URLSearchParams({
     p: AUTHCFG.altPolicy, client_id: AUTHCFG.clientId, response_type: "code",
     redirect_uri: AUTHCFG.socialRedirect, scope: "openid offline_access",
-    code_challenge: challenge, code_challenge_method: "S256", state: stt, nonce: stt,
+    code_challenge: a.challenge, code_challenge_method: "S256", state: a.state, nonce: a.state,
     response_mode: "query",
   });
   return `${AUTHCFG.authorizeBase}?${params.toString()}`;
 }
+async function buildSocialUrl(fresh){ return socialUrlFor(await loginAttempt(fresh)); }
 async function socialExchange(pastedUrl){
   const raw = String(pastedUrl).trim();
   const errM = raw.match(/[?&#]error_description=([^&\s]+)/);
@@ -3664,12 +3681,16 @@ async function socialExchange(pastedUrl){
     throw new Error("LaLiga devolvió un error: " + msg);
   }
   // acepta la URL completa de jwt.ms o el código suelto pegado a mano
-  const m = raw.match(/[?&#]code=([^&\s]+)/) || (/^[A-Za-z0-9._~-]{20,}$/.test(raw) ? [null, raw] : null);
-  if (!m) throw new Error("Ahí no viene el código. En la pestaña de jwt.ms, TOCA la barra de direcciones (se desplegará la dirección completa), cópiala entera y pégala aquí.");
+  const m = raw.match(/[?&#]code=([^&\s#]+)/) || (/^[A-Za-z0-9._~-]{20,}$/.test(raw) ? [null, raw] : null);
+  if (!m) throw new Error("Ahí no viene el código. En la página de jwt.ms pulsa Compartir → Copiar y vuelve a pulsar «Pegar y entrar».");
   const code = decodeURIComponent(m[1]);
-  const saved = JSON.parse(localStorage.getItem("fs_pkce") || "{}");
-  if (!saved.verifier || (saved.at && Date.now() - saved.at > 30 * 60000)) {
-    throw new Error("Sesión de login caducada. Pulsa de nuevo «Entrar con Google» y repite.");
+  const saved = pendingLogin();
+  if (!saved) throw new Error("El intento de inicio de sesión caducó (10 min). Pulsa «Empezar de nuevo» y repite.");
+  // SEGURIDAD: el state devuelto debe ser el de ESTE intento (anti-CSRF: nadie
+  // puede colarte un inicio de sesión que no empezaste tú)
+  const stM = raw.match(/[?&#]state=([^&\s#]+)/);
+  if (stM && decodeURIComponent(stM[1]) !== saved.state) {
+    throw new Error("Ese enlace no corresponde a este intento de inicio de sesión. Pulsa «Empezar de nuevo» y repite.");
   }
   const body = new URLSearchParams({
     grant_type: "authorization_code", client_id: AUTHCFG.clientId, code,
@@ -3697,6 +3718,171 @@ function saveAuth(a){
   else localStorage.removeItem(LS.auth);
 }
 function authValid(){ return !!(state.auth?.access_token && (state.auth.expAt || 0) > Date.now() + 60000); }
+
+
+/* ===================== VINCULAR APARATOS =====================
+   El aparato que YA tiene sesión genera un código de 12 caracteres:
+   los 4 primeros solo localizan el buzón y los 8 últimos (40 bits) son el
+   secreto. Con ese secreto (PBKDF2-SHA256, 300.000 vueltas, sal aleatoria) se
+   cifra con AES-GCM la sesión y la clave de la nube. El puente solo guarda el
+   texto CIFRADO, 5 minutos como mucho, y lo borra al leerlo: ni Cloudflare ni
+   nadie que lo intercepte puede abrirlo sin el código, y forzarlo a ciegas
+   costaría meses de cálculo para un buzón que muere en 5 minutos.
+   El código solo se ve en tu pantalla: no viaja por ninguna parte. */
+const PAIR_ABC = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // base32 Crockford (sin I, L, O, U)
+const PAIR_ITER = 300000;
+function pairNewCode(){
+  const b = crypto.getRandomValues(new Uint8Array(12));
+  const s = [...b].map(x => PAIR_ABC[x & 31]).join("");
+  return s.slice(0, 4) + "-" + s.slice(4, 8) + "-" + s.slice(8);
+}
+function pairNorm(code){
+  return String(code || "").toUpperCase().replace(/[\s-]/g, "")
+    .replace(/O/g, "0").replace(/[IL]/g, "1").replace(/U/g, "V");
+}
+const _hex = buf => [...new Uint8Array(buf)].map(x => x.toString(16).padStart(2, "0")).join("");
+const _ub64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const _b64u = s => Uint8Array.from(atob(s), ch => ch.charCodeAt(0));
+async function pairIds(norm){
+  const enc = new TextEncoder();
+  const id = _hex(await crypto.subtle.digest("SHA-256", enc.encode("fs-pair:" + norm.slice(0, 4))));
+  const ack = _hex(await crypto.subtle.digest("SHA-256", enc.encode("fs-pair-ack:" + norm)));
+  return { id, ack };
+}
+async function pairKey(norm, salt){
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(norm.slice(4)), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: PAIR_ITER, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+async function pairSeal(norm, obj){
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await pairKey(norm, salt);
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+  return { salt: _ub64(salt), iv: _ub64(iv), ct: _ub64(ct) };
+}
+async function pairOpen(norm, box){
+  const key = await pairKey(norm, _b64u(box.salt));
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: _b64u(box.iv) }, key, _b64u(box.ct));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+const pairUrl = id => state.workerUrl.replace(/\/+$/, "") + "/pair/" + id;
+const pairDevice = () => DESK ? "el PC" : /iPhone|iPad/.test(navigator.userAgent) ? "el iPhone" : "otro navegador";
+
+/* --- lado que TIENE sesión: enseña el código y espera la confirmación --- */
+let _pairTimer = null;
+async function openPairSend(){
+  if (!state.auth?.refresh_token) { toast("Inicia sesión primero en este aparato", "err"); return; }
+  if (!state.workerUrl) { toast("Falta el servidor puente", "err"); return; }
+  const code = pairNewCode(), norm = pairNorm(code);
+  openModal(`${modalHead("📲 Vincular otro aparato")}
+    <div class="modal-body">
+      <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:14px">
+        En el otro aparato abre Fantasy Studio → <b>Mi Liga</b> → <b>«¿Ya tienes sesión en otro aparato?»</b>
+        y escribe este código:</div>
+      <div style="font-family:'Sora',sans-serif;font-size:30px;font-weight:800;letter-spacing:3px;text-align:center;padding:18px 0;color:var(--acc)">${code}</div>
+      <div id="pairState" style="text-align:center;font-size:12.5px;color:var(--text-2);margin-bottom:12px">Preparando el cifrado…</div>
+      <div style="font-size:11px;color:var(--text-3);line-height:1.55">
+        🔒 Tu sesión viaja cifrada de extremo a extremo con este código, que solo está en tu pantalla.
+        Sirve una sola vez y caduca en 5 minutos. No se lo digas a nadie: quien lo tenga entra en tu Fantasy.</div>
+    </div>`);
+  const st = t => { const el = document.getElementById("pairState"); if (el) el.innerHTML = t; };
+  try {
+    const { id, ack } = await pairIds(norm);
+    const box = await pairSeal(norm, { rt: state.auth.refresh_token, policy: state.auth.policy || AUTHCFG.altPolicy,
+      workerUrl: state.workerUrl, syncKey: syncKey(), from: pairDevice(), at: Date.now() });
+    const r = await fetch(pairUrl(id), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(box) });
+    if (!r.ok) throw new Error("el puente respondió " + r.status);
+    const fin = Date.now() + 300000;
+    clearInterval(_pairTimer);
+    _pairTimer = setInterval(async () => {
+      if (!document.getElementById("pairState")) { clearInterval(_pairTimer); return; } // modal cerrado
+      const left = Math.max(0, Math.round((fin - Date.now()) / 1000));
+      if (!left) { clearInterval(_pairTimer); st("⌛ Código caducado. Cierra y genera otro."); return; }
+      st(`Esperando al otro aparato… <b>${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}</b>`);
+      try {
+        const a = await fetch(pairUrl(ack), { cache: "no-store" });
+        if (!a.ok) return;
+        clearInterval(_pairTimer);
+        const res = await pairOpen(norm, await a.json());
+        // el otro aparato decidió qué nube es la buena: si no es la mía, me uno
+        if (res.syncKey && res.syncKey !== syncKey()) {
+          localStorage.setItem("fs_sync_key", res.syncKey);
+          _lastCloudAt = null;
+          await mergeCloud();
+          scheduleSync();
+        }
+        st(`✅ ¡Vinculado con ${esc(res.from || "el otro aparato")}! Ya compartís sesión y nube.`);
+        vibrate(20);
+      } catch(e) { /* aún no ha contestado */ }
+    }, 3000);
+  } catch(e) {
+    st(`<span class="down">No se pudo preparar: ${esc(e.message)}</span>`);
+  }
+}
+
+/* --- lado SIN sesión: escribe el código y recibe la sesión --- */
+async function pairReceive(){
+  const inp = document.getElementById("pairCode");
+  const btn = document.getElementById("pairGo");
+  const norm = pairNorm(inp?.value);
+  if (norm.length !== 12 || [...norm].some(ch => !PAIR_ABC.includes(ch))) {
+    toast("El código tiene 12 caracteres, como XXXX-XXXX-XXXX", "err"); return;
+  }
+  if (!state.workerUrl) { toast("Falta el servidor puente", "err"); return; }
+  const lbl = t => { if (btn) btn.textContent = t; };
+  if (btn) btn.disabled = true;
+  try {
+    lbl("Buscando…");
+    const { id, ack } = await pairIds(norm);
+    // el buzón puede tardar unos segundos en verse desde aquí (copias de Cloudflare)
+    let box = null;
+    for (let i = 0; i < 12 && !box; i++) {
+      const r = await fetch(pairUrl(id), { cache: "no-store" });
+      if (r.ok) box = await r.json();
+      else await new Promise(res => setTimeout(res, 2500));
+    }
+    if (!box) throw new Error("No encuentro ese código. Comprueba que está bien o genera otro en el otro aparato.");
+    lbl("Descifrando…");
+    let p;
+    try { p = await pairOpen(norm, box); }
+    catch(e) { throw new Error("Código incorrecto. Por seguridad ese código ya no sirve: genera otro en el otro aparato."); }
+    if (!p?.rt) throw new Error("El paquete recibido no trae sesión");
+    lbl("Conectando con LaLiga…");
+    saveAuth({ refresh_token: p.rt, policy: p.policy, access_token: null, expAt: 0 });
+    await fantasyRefresh(); // sesión propia de este aparato, recién emitida por LaLiga
+    if (p.workerUrl && !state.workerUrl) { state.workerUrl = p.workerUrl; localStorage.setItem(LS.worker, p.workerUrl); }
+    // nube compartida: gana la que más historia tiene (normalmente la del bot)
+    let canon = syncKey();
+    if (p.syncKey && p.syncKey !== canon) {
+      const dias = async k => {
+        try {
+          const r = await fetch(state.workerUrl.replace(/\/+$/, "") + "/sync/" + k + "/versions");
+          return r.ok ? ((await r.json()).versions || []).length : 0;
+        } catch(e) { return 0; }
+      };
+      const [suyo, mio] = await Promise.all([dias(p.syncKey), dias(canon)]);
+      if (suyo >= mio) {
+        canon = p.syncKey;
+        localStorage.setItem("fs_sync_key", canon);
+        _lastCloudAt = null;
+      }
+    }
+    await fetch(pairUrl(ack), { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(await pairSeal(norm, { ok: true, syncKey: canon, from: pairDevice() })) });
+    await mergeCloud();
+    scheduleSync();
+    toast("✅ Sesión iniciada desde " + (p.from || "el otro aparato"), "ok");
+    vibrate(20);
+    state.liga = { loading:false, data:{}, errors:[] };
+    render();
+    loadLiga(true);
+  } catch(e) {
+    if (state.auth && !state.auth.access_token) saveAuth(null);
+    toast(e.message, "err");
+    if (btn) { btn.disabled = false; btn.textContent = "Vincular"; }
+  }
+}
 
 async function fantasyLogin(email, pass){
   const body = new URLSearchParams({
@@ -4790,21 +4976,34 @@ function viewLiga(){
 
   // Paso 2: login
   if (!state.auth) {
-    if (!DESK) setTimeout(prepareSocial, 30); // deja el enlace de Google listo ANTES del toque (Safari bloquea popups asíncronos)
+    if (!DESK) setTimeout(prepareSocial, 30); // enlace listo ANTES del toque (Safari bloquea popups asíncronos)
+    const pend = !DESK && pendingLogin();
     return `
     <div class="section-title">${IC.lock.replace('class="ic"','class="ic" style="width:14px;height:14px"')} Iniciar sesión en LaLiga Fantasy</div>
+
     <div class="card" style="padding:16px;margin-bottom:12px">
-      ${DESK ? `<div style="font-size:13px;color:var(--text-2);line-height:1.55;margin-bottom:14px">
-        <b>¿Entras al Fantasy con Google, Apple o Facebook?</b> Pulsa aquí: se abre la página
-        <b>oficial</b> de LaLiga en una ventana y, al terminar, la sesión se conecta sola.
+      <div style="font-size:14px;font-weight:700;margin-bottom:6px">📲 ¿Ya tienes sesión en otro aparato?</div>
+      <div style="font-size:12.5px;color:var(--text-2);line-height:1.55;margin-bottom:12px">
+        Lo más fácil. En el aparato donde ya has entrado (por ejemplo el PC): <b>Mi Liga → 📲 Vincular</b>.
+        Te dará un código de 12 caracteres: escríbelo aquí.</div>
+      <div class="field" style="margin-bottom:10px">
+        <input id="pairCode" placeholder="XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false"
+          style="font-family:'Sora',sans-serif;font-size:18px;letter-spacing:2px;text-align:center"
+          onkeydown="if(event.key==='Enter')pairReceive()"></div>
+      <button class="btn-acc" style="width:100%" id="pairGo" onclick="pairReceive()">Vincular</button>
+    </div>
+
+    <div class="card" style="padding:16px;margin-bottom:12px">
+      <div style="font-size:14px;font-weight:700;margin-bottom:6px">Entrar con Google, Apple o Facebook</div>
+      ${DESK ? `<div style="font-size:12.5px;color:var(--text-2);line-height:1.55;margin-bottom:12px">
+        Se abre la página <b>oficial</b> de LaLiga en una ventana y, al terminar, la sesión se conecta sola.
       </div>
       <button class="btn-acc" id="socialLink" style="width:100%" onclick="socialDesktop()">${IC.user.replace('class="ic"','class="ic" style="width:16px;height:16px"')} Entrar con Google / Apple / Facebook</button>`
-      : `<div style="font-size:13px;color:var(--text-2);line-height:1.55;margin-bottom:14px">
-        <b>¿Entras al Fantasy con Google, Apple o Facebook?</b> Usa este botón. Se abre la página
-        <b>oficial</b> de LaLiga para que inicies sesión como siempre; al terminar, copia el enlace y pégalo aquí.
+      : `<div style="font-size:12.5px;color:var(--text-2);line-height:1.55;margin-bottom:12px">
+        Se abre la página <b>oficial</b> de LaLiga. Inicias sesión como siempre y vuelves aquí con el enlace.
       </div>
-      <a class="btn-acc" id="socialLink" style="width:100%;text-decoration:none;opacity:.6;pointer-events:none" href="#" target="_blank" rel="noopener" onclick="return socialClicked()">${IC.user.replace('class="ic"','class="ic" style="width:16px;height:16px"')} Entrar con Google / Apple / Facebook</a>`}
-      <div id="socialStep"></div>
+      <a class="btn-${pend?.opened ? "ghost" : "acc"}" id="socialLink" style="width:100%;text-decoration:none;opacity:.6;pointer-events:none" href="#" target="_blank" rel="noopener" onclick="return socialClicked()">${IC.user.replace('class="ic"','class="ic" style="width:16px;height:16px"')} ${pend?.opened ? "Abrir otra vez la página de LaLiga" : "Entrar con Google / Apple / Facebook"}</a>`}
+      <div id="socialStep">${pend?.opened ? socialStepHtml() : ""}</div>
     </div>
 
     <details class="card" style="padding:0" id="emailDetails">
@@ -4823,9 +5022,9 @@ function viewLiga(){
       ${IC.lock.replace('class="ic"','class="ic" style="width:11px;height:11px;vertical-align:-1.5px"')}
       El inicio de sesión ocurre <b>solo</b> en el servidor oficial de LaLiga (login.laliga.es). Ni tu contraseña
       ni tu login de Google pasan por Fantasy Studio ni por el servidor puente: aquí solo queda la sesión ya creada,
-      guardada en este dispositivo.
+      guardada en este dispositivo. La vinculación entre aparatos va cifrada de extremo a extremo.
     </div>
-    <button class="btn-ghost" style="width:100%;margin-top:12px" onclick="changeWorkerUrl()">Cambiar servidor puente</button>`;
+    ${DESK ? "" : `<button class="btn-ghost" style="width:100%;margin-top:12px" onclick="changeWorkerUrl()">Cambiar servidor puente</button>`}`;
   }
 
   // Paso 3: datos de mi liga
@@ -4849,6 +5048,7 @@ function viewLiga(){
       <div style="font-size:11.5px;color:var(--text-3)">${sel ? esc(sel.name) : "Sin liga en esta competición"}${money != null ? ` · <b style="color:var(--acc)">${fmtM(money)} €</b>` : ""}</div>
     </div>
     <button class="icon-btn" onclick="refreshLigaTotal()" title="Actualizar liga y plantillas">${state.liga.loading ? IC.refresh.replace('class="ic"','class="ic spinning"') : IC.refresh}</button>
+    <button class="btn-ghost" style="padding:8px 12px;font-size:12px" onclick="openPairSend()" title="Pasar la sesión a otro aparato con un código">📲 Vincular</button>
     <button class="btn-ghost" style="padding:8px 12px;font-size:12px" onclick="fantasyLogout()">Salir</button>
   </div>
   ${leagues.length > 1 ? `<div class="chips-row no-scrollbar">${leagues.map(l =>
@@ -6061,10 +6261,11 @@ async function doLogin(){
 }
 /* Prepara el enlace de login ANTES de que el usuario toque: al ser un <a> con
    href real, Safari (incluida la app instalada en pantalla de inicio) lo abre
-   siempre, sin bloqueador de ventanas emergentes. */
+   siempre, sin bloqueador de ventanas emergentes. REUTILIZA el intento
+   pendiente: repintar la pantalla ya no invalida el enlace. */
 async function prepareSocial(){
   const a = document.getElementById("socialLink");
-  if (!a) return;
+  if (!a || a.tagName !== "A") return;
   try {
     a.href = await buildSocialUrl();
     a.style.opacity = "";
@@ -6073,25 +6274,48 @@ async function prepareSocial(){
     a.textContent = "Este navegador no permite el login seguro (PKCE)";
   }
 }
+function socialStepHtml(){
+  const ios = /iPhone|iPad/.test(navigator.userAgent);
+  return `<div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px">Paso 2 · vuelve con el enlace</div>
+    <div style="font-size:12.5px;color:var(--text-2);line-height:1.6;margin-bottom:12px">
+      Al terminar en LaLiga llegarás a <b>jwt.ms</b>, una página <b>en blanco</b>: es lo normal, el código va escondido en su dirección.<br>
+      <b>1.</b> ${ios ? "En esa página pulsa <b>Compartir</b> (el cuadrado con la flecha ↑) → <b>Copiar</b>." : "Copia la dirección completa de la barra de arriba."}<br>
+      <b>2.</b> Vuelve aquí y pulsa:
+    </div>
+    <button class="btn-acc" style="width:100%;padding:14px;font-size:15px" id="pasteGo" onclick="pasteAndLogin()">📋 Pegar y entrar</button>
+    <details style="margin-top:10px"><summary style="font-size:12px;color:var(--text-3);cursor:pointer">¿El botón no pega? Hazlo a mano</summary>
+      <div class="field" style="margin:10px 0 8px"><input id="socialUrl" placeholder="https://jwt.ms/?code=…" autocomplete="off" inputmode="url"></div>
+      <button class="btn-ghost" style="width:100%" id="socialGo" onclick="finishSocial()">Entrar</button>
+    </details>
+    <button class="btn-ghost" style="width:100%;margin-top:10px;font-size:12px" onclick="restartLogin()">Empezar de nuevo</button>
+  </div>`;
+}
 function socialClicked(){
   const a = document.getElementById("socialLink");
   if (!a || !a.href || a.getAttribute("href") === "#") return false;
+  // se apunta en el intento guardado: el paso 2 sobrevive a cualquier repintado
+  const att = pendingLogin();
+  if (att) { att.opened = true; localStorage.setItem("fs_pkce", JSON.stringify(att)); }
   const box = document.getElementById("socialStep");
-  if (box && !box.innerHTML) box.innerHTML = `
-    <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px">
-      <div style="font-size:12.5px;color:var(--text-2);line-height:1.55;margin-bottom:10px">
-        Se está abriendo la página de LaLiga. Inicia sesión con tu método de siempre.
-        Al terminar verás una página de <b>jwt.ms</b> (puede parecer vacía — es normal).<br><br>
-        <b>1.</b> En esa página, <b>toca la barra de direcciones</b> de arriba: aunque solo se lea
-        «jwt.ms», al tocarla se despliega la dirección completa (larga, con <b>code=</b> dentro).<br>
-        <b>2.</b> Cópiala entera (mantén pulsado → Seleccionar todo → Copiar), vuelve aquí y pégala:
-      </div>
-      <div class="field" style="margin-bottom:10px">
-        <input id="socialUrl" placeholder="https://jwt.ms/?code=…" autocomplete="off" inputmode="url">
-      </div>
-      <button class="btn-acc" style="width:100%" id="socialGo" onclick="finishSocial()">Terminar de conectar</button>
-    </div>`;
+  if (box && !box.innerHTML.trim()) box.innerHTML = socialStepHtml();
   return true; // deja que el enlace navegue (nueva pestaña / Safari)
+}
+function restartLogin(){
+  localStorage.removeItem("fs_pkce");
+  render();
+}
+async function pasteAndLogin(){
+  let txt = "";
+  try { txt = await navigator.clipboard.readText(); } catch(e) {}
+  if (!txt || !/code=|^[A-Za-z0-9._~-]{20,}$/.test(txt.trim())) {
+    const det = document.querySelector("#socialStep details");
+    if (det) det.open = true;
+    document.getElementById("socialUrl")?.focus();
+    toast(txt ? "Lo copiado no es el enlace de jwt.ms. Cópialo de nuevo (Compartir → Copiar)" : "No he podido leer lo copiado: pégalo en la casilla", "err");
+    return;
+  }
+  await finishSocialWith(txt, document.getElementById("pasteGo"), "📋 Pegar y entrar");
 }
 /* Login en la app de PC: la ventana oficial de LaLiga se abre aquí dentro y la
    vuelta (?code=…) se recoge sola, sin copiar ni pegar nada. */
@@ -6099,7 +6323,7 @@ async function socialDesktop(){
   const btn = document.getElementById("socialLink");
   if (btn) { btn.disabled = true; btn.textContent = "Abriendo la página de LaLiga…"; }
   try {
-    const url = await buildSocialUrl();
+    const url = await buildSocialUrl(true);
     const vuelta = await DESK.oauth(url, AUTHCFG.socialRedirect);
     if (!vuelta) throw new Error("Se cerró la ventana antes de terminar");
     await socialExchange(vuelta);
@@ -6113,10 +6337,11 @@ async function socialDesktop(){
   }
 }
 async function finishSocial(){
-  const inp = document.getElementById("socialUrl");
-  const btn = document.getElementById("socialGo");
-  const val = (inp?.value || "").trim();
+  const val = (document.getElementById("socialUrl")?.value || "").trim();
   if (!val) { toast("Pega el enlace de jwt.ms", "err"); return; }
+  await finishSocialWith(val, document.getElementById("socialGo"), "Entrar");
+}
+async function finishSocialWith(val, btn, label){
   if (btn) { btn.disabled = true; btn.textContent = "Conectando…"; }
   try {
     await socialExchange(val);
@@ -6127,7 +6352,7 @@ async function finishSocial(){
     loadLiga(true);
   } catch(e) {
     toast(e.message, "err");
-    if (btn) { btn.disabled = false; btn.textContent = "Terminar de conectar"; }
+    if (btn) { btn.disabled = false; btn.textContent = label; }
   }
 }
 function pickLeague(id){

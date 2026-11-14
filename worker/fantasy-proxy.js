@@ -24,6 +24,7 @@ const ALLOWED_ORIGINS = [
   "https://manugrraa.github.io",
   "http://localhost:8613",
   "http://127.0.0.1:8613",
+  "http://127.0.0.1:8614", // la app de escritorio (Electron) sirve el repo aquí
 ];
 
 const API_HOST = "https://fantasy-api.llt-services.com";
@@ -75,6 +76,37 @@ async function handleSync(request, url, env, cors, originOk){
   return jsonRes({ error: "método no permitido" }, 405, cors);
 }
 
+/* /pair/{id}: buzón de UN SOLO USO para vincular aparatos.
+   El contenido llega YA CIFRADO de extremo a extremo (AES-GCM con una clave
+   derivada del código que solo ven los dos aparatos): aquí no se puede leer.
+   Caduca a los 5 minutos y se borra al leerlo. */
+const PAIR_TTL_S = 300;
+const PAIR_MAX_BYTES = 16000;
+async function handlePair(request, url, env, cors, originOk){
+  if (!env.SYNC) return jsonRes({ error: "KV no configurado" }, 500, cors);
+  if (!originOk) return jsonRes({ error: "origen no permitido" }, 403, cors);
+  const id = url.pathname.slice("/pair/".length);
+  if (!/^[a-f0-9]{24,64}$/.test(id)) return jsonRes({ error: "id no válido" }, 400, cors);
+  const k = "p:" + id;
+  if (request.method === "PUT") {
+    const body = await request.text();
+    if (body.length > PAIR_MAX_BYTES) return jsonRes({ error: "demasiado grande" }, 413, cors);
+    let o;
+    try { o = JSON.parse(body); } catch(e) { return jsonRes({ error: "no es JSON" }, 400, cors); }
+    if (!o || typeof o.ct !== "string" || typeof o.iv !== "string" || typeof o.salt !== "string")
+      return jsonRes({ error: "formato no válido" }, 400, cors);
+    await env.SYNC.put(k, body, { expirationTtl: PAIR_TTL_S });
+    return jsonRes({ ok: true }, 200, cors);
+  }
+  if (request.method === "GET") {
+    const v = await env.SYNC.get(k);
+    if (v == null) return jsonRes({ error: "no hay nada (aún no está o ya caducó)" }, 404, cors);
+    await env.SYNC.delete(k); // un solo uso
+    return new Response(v, { status: 200, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" } });
+  }
+  return jsonRes({ error: "método no permitido" }, 405, cors);
+}
+
 export default {
   /**
    * Cron del Worker (fiable, a diferencia del de GitHub): a la hora en que el
@@ -120,6 +152,9 @@ export default {
     // (que es un secreto largo) también sin origen, para GitHub Actions.
     if (url.pathname.startsWith("/sync/")) {
       return handleSync(request, url, env, cors, originOk);
+    }
+    if (url.pathname.startsWith("/pair/")) {
+      return handlePair(request, url, env, cors, originOk);
     }
 
     if (!originOk) {
