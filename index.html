@@ -3691,6 +3691,18 @@ function viewPlantilla(){
     ${statTile("Valor actual", fmtM(st.current) + " €", "")}
     ${statTile("Plusvalía", `<span class="${cls(st.latent)}">${fmtMSign(st.latent)}</span>`, st.invested ? (st.latent/st.invested*100).toLocaleString("es-ES",{maximumFractionDigits:1}) + " %" : "")}
   </div>
+  ${(() => {
+    // 🔮 previsión de mañana para mi plantilla (scripts/analitica.py)
+    const ps = entries.filter(e => !e.custom).map(e => anP(c, e.pid)).filter(a => a && a.pred != null);
+    if (!ps.length) return "";
+    const tot = ps.reduce((s2, a) => s2 + a.pred, 0);
+    const giros = entries.filter(e => !e.custom && anGiro(c, e.pid)).length;
+    return `<button class="card clickable" style="width:100%;text-align:left;padding:12px 15px;margin:-6px 0 16px;font-size:13px;display:flex;align-items:center;gap:10px"
+      onclick="state.predFiltro='mios';setView('predicciones')">
+      <span style="font-size:18px">🔮</span>
+      <span style="flex:1">Mañana se espera <b class="${cls(tot)}">${fmtMSign(tot)}</b>${giros ? ` · <b style="color:var(--orange)">${giros} posible${giros > 1 ? "s" : ""} giro${giros > 1 ? "s" : ""}</b>` : ""}</span>
+      <span style="color:var(--acc);font-size:12px;font-weight:700">Ver ›</span></button>`;
+  })()}
   ${body}
   <div style="display:flex;gap:9px;margin-top:14px">
     <button class="btn-acc" style="flex:1" onclick="openPicker()">${IC.plus} Añadir jugador</button>
