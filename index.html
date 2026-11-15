@@ -417,6 +417,19 @@
   .mk-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 7px; padding: 0 14px 11px; }
   .mk-fact { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 7px 6px; text-align: center; min-width: 0; }
   .mk-fact .n { font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .link-btn { color: var(--acc); font-size: 11.5px; font-weight: 700; background: none; border: 0; padding: 0; cursor: pointer; }
+  .an-line { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; margin-top: 7px; }
+  .an-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; line-height: 1.5; }
+  .fx-row { display: flex; gap: 5px; margin-top: 6px; }
+  .fx { flex: 1; min-width: 0; text-align: center; }
+  .fx-wk { font-size: 9px; color: var(--text-3); font-weight: 700; }
+  .fx-box { border-radius: 7px; padding: 5px 2px; font-size: 10.5px; font-weight: 800; color: #0b0b0b; margin: 2px 0; white-space: nowrap; overflow: hidden; }
+  .fx-pct { font-size: 9.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .fx-team { padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .fx-team:last-child { border-bottom: 0; }
+  .fx-name { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; }
+  .fx-name img { width: 16px; height: 16px; }
+  .fx-name span { margin-left: auto; font-size: 10.5px; color: var(--text-3); font-weight: 600; }
   .mk-fact .l { font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--text-3); margin-top: 2px; }
   .mk-actions { display: flex; gap: 8px; padding: 0 14px 13px; }
   .mk-actions > * { flex: 1; }
@@ -1099,7 +1112,7 @@ async function fetchJSON(url){
 }
 
 async function loadAll(){
-  const [meta, teams, p1, p2, h1, h2, c1, c2, f1, f2, s1, s2, sl1, sl2] = await Promise.all([
+  const [meta, teams, p1, p2, h1, h2, c1, c2, f1, f2, s1, s2, sl1, sl2, an1, an2] = await Promise.all([
     fetchJSON("data/meta.json"),
     fetchJSON("data/teams.json"),
     fetchJSON("data/players_1.json"),
@@ -1114,6 +1127,8 @@ async function loadAll(){
     fetchJSON("data/stats_2.json").catch(()=> null),
     fetchJSON("data/status_log_1.json").catch(()=> ({})),
     fetchJSON("data/status_log_2.json").catch(()=> ({})),
+    fetchJSON("data/analitica_1.json").catch(()=> null),
+    fetchJSON("data/analitica_2.json").catch(()=> null),
   ]);
   state.meta = meta;
   state.teams = new Map(teams.map(t => [String(t.id), t]));
@@ -1123,6 +1138,7 @@ async function loadAll(){
   state.calFull = { "1": f1, "2": f2 };
   state.stats = { "1": s1, "2": s2 };
   state.statusLog = { "1": sl1, "2": sl2 };
+  state.analitica = { "1": an1, "2": an2 }; // predicciones, calendario y puntos esperados (scripts/analitica.py)
   // caché en vivo previa (de "Actualizar ahora") si es más reciente que los datos publicados
   const cache = load(LS.cache, null);
   if (cache && cache.at && state.meta.updatedAt && new Date(cache.at) > new Date(state.meta.updatedAt)) {
@@ -1306,6 +1322,11 @@ function rivalDifficulty(c, teamId){
   // 1 = rival flojo … 3 = rival duro, comparando su fuerza con la media de la liga
   const info = nextRivalInfo(c, teamId);
   if (!info || !info.rival) return null;
+  // con analítica: facilidad del partido según el modelo de goles esperados
+  const nx = anNext(c, teamId)[0];
+  if (nx && String(nx[1]) === String(info.rival.id)) {
+    return { ...info, facil: nx[3], level: nx[3] >= 58 ? 1 : nx[3] <= 42 ? 3 : 2 };
+  }
   const strengths = [...new Set((state.players[c]||[]).map(p => String(p.teamId)))].map(t => teamStrength(c, t));
   const avg = strengths.reduce((a,b)=>a+b,0) / (strengths.length || 1);
   const s = teamStrength(c, info.rival.id);
@@ -1392,11 +1413,12 @@ const VIEWS = [
   { id:"consejos",   label:"Consejos",     short:"Consejos",  icon:IC.bulb },
   { id:"stats",      label:"Estadísticas", short:"Stats",     icon:IC.chart },
   { id:"calendario", label:"Calendario",   short:"Calendario",icon:IC.cal },
+  { id:"predicciones", label:"Predicciones", short:"Predic.",  icon:IC.bulb },
   { id:"plantilla",  label:"Mi Plantilla", short:"Plantilla", icon:IC.shirt },
   { id:"movs",       label:"Movimientos",  short:"Movs",      icon:IC.moves },
 ];
 const BOTTOM_IDS = ["resumen","mercado","liga","plantilla"]; // + botón Más
-const MORE_IDS = ["consejos","stats","calendario","movs"];
+const MORE_IDS = ["predicciones","consejos","stats","calendario","movs"];
 
 function renderNav(){
   document.getElementById("desktopTabs").innerHTML = VIEWS.map(v =>
@@ -1513,6 +1535,7 @@ function render(){
   if (state.view === "calendario") main.innerHTML = viewCalendario();
   if (state.view === "plantilla")  main.innerHTML = viewPlantilla();
   if (state.view === "movs")       main.innerHTML = viewMovs();
+  if (state.view === "predicciones") main.innerHTML = viewPredicciones();
   main.dataset.view = state.view;
   restoreForm(main, snap);
   afterRender();
@@ -1635,6 +1658,7 @@ function viewResumen(){
   ${hitBanner}
   ${weekBanner(week)}
   <div class="quick-nav">
+    <button class="card clickable" onclick="setView('predicciones')"><div class="qi">🔮</div>Predicciones</button>
     <button class="card clickable" onclick="setView('consejos')"><div class="qi">💡</div>Consejos</button>
     <button class="card clickable" onclick="setView('stats')"><div class="qi">📊</div>Estadísticas</button>
     <button class="card clickable" onclick="setView('calendario')"><div class="qi">📅</div>Calendario</button>
@@ -1691,6 +1715,186 @@ function weekBanner(week){
       <div style="font-size:13.5px;font-weight:700">Jornada ${week.weekNumber}</div>
       <div style="font-size:11.5px;color:var(--text-3)">${week.openingWeekDate ? "arranca " + fmtDateLong(week.openingWeekDate) : ""}</div>
     </div>${sub}</div>`;
+}
+
+
+/* ======================= ANALÍTICA =======================
+   Lee data/analitica_{comp}.json (scripts/analitica.py): previsión del precio
+   de mañana con probabilidad calibrada, puja ideal/máxima, titularidad,
+   puntos esperados y calendario (Poisson). Cada modelo se examina cada día con
+   datos que no ha visto y su acierto se enseña tal cual en «¿Cuánto acierta?». */
+function AN(c){ return state.analitica?.[c] || null; }
+function anP(c, pid){ return AN(c)?.jugadores?.[String(pid)] || null; }
+function anNext(c, teamId){ return AN(c)?.equipos?.partidos?.[String(teamId)] || []; }
+/* probabilidad (0-100) de la dirección prevista */
+function anProb(a){ return a.pred >= 0 ? a.ps : 100 - a.ps; }
+/* «posible giro»: solo con la señal fuerte que el examen ha validado */
+function anGiro(c, pid){
+  const a = anP(c, pid), u = AN(c)?.examen?.precio?.umbral_giro;
+  if (!a || a.ps == null || !u) return null;
+  const hoy = deltas(c, pid).d1;
+  if (!hoy) return null;
+  const contraria = hoy > 0 ? 100 - a.ps : a.ps;
+  return contraria >= u * 100 ? (hoy > 0 ? "baja" : "sube") : null;
+}
+function facilColor(f){ return f >= 62 ? "var(--green)" : f >= 50 ? "#a3d977" : f >= 40 ? "var(--orange)" : "var(--red)"; }
+function facilTxt(f){ return f >= 70 ? "muy fácil" : f >= 58 ? "fácil" : f >= 45 ? "media" : f >= 33 ? "difícil" : "muy difícil"; }
+function predChip(c, pid, opts){
+  const a = anP(c, pid);
+  if (!a || a.pred == null) return "";
+  const g = anGiro(c, pid);
+  return `<span class="delta-pill ${cls(a.pred)}" title="Previsión para la actualización de mañana (01:00)">🔮 ${a.pred ? fmtMSign(a.pred) : "="} · ${anProb(a)}%</span>`
+    + (g && !(opts && opts.sinGiro) ? ` <span class="badge orange" style="padding:1px 6px;font-size:9.5px" title="El modelo ve probable que cambie de dirección">↺ giro</span>` : "");
+}
+/* próximos rivales con su facilidad (0-100) */
+function fixtureChips(c, teamId, n){
+  const lst = anNext(c, teamId).slice(0, n || 5);
+  if (!lst.length) return "";
+  return `<div class="fx-row">${lst.map(m => {
+    const r = state.teams.get(String(m[1]));
+    return `<div class="fx" title="J${m[0]} · ${m[2] ? "en casa" : "fuera"} · ${facilTxt(m[3])} · goles esperados ${m[4].toFixed(1)}-${m[5].toFixed(1)}">
+      <div class="fx-wk">J${m[0]}</div>
+      <div class="fx-box" style="background:${facilColor(m[3])}">${esc((r?.shortName || "?").slice(0, 3))}${m[2] ? "" : "·f"}</div>
+      <div class="fx-pct">${m[3]}%</div></div>`;
+  }).join("")}</div>`;
+}
+/* tarjeta de previsión para la ficha del jugador */
+function anCard(c, p){
+  const a = anP(c, p.id);
+  if (!a) return "";
+  const v = pVal(p);
+  const g = anGiro(c, p.id);
+  const lin = [];
+  if (a.pred != null) {
+    lin.push(`<div class="an-line"><span>Mañana (01:00)</span><b class="${cls(a.pred)}">${a.pred ? fmtMSign(a.pred) : "sin cambios"}</b></div>
+      <div class="an-sub">${anProb(a)} % de que ${a.pred >= 0 ? "suba" : "baje"}${g ? ` · <b style="color:var(--orange)">↺ posible giro: el modelo cree que ${g === "sube" ? "dejará de bajar" : "dejará de subir"}</b>` : ""}</div>`);
+    lin.push(a.pi > v
+      ? `<div class="an-line"><span>Puja ideal</span><b>${fmtM(a.pi)} €</b></div>
+         <div class="an-line"><span>Puja máxima razonable</span><b>${fmtM(a.pm)} €</b></div>
+         <div class="an-sub">Valor que se espera que alcance a mitad de camino / el día de su próximo partido.</div>`
+      : `<div class="an-line"><span>Puja</span><b>su valor, ${fmtM(v)} €</b></div>
+         <div class="an-sub">No se espera que suba antes de su partido: pagar de más es perder dinero.</div>`);
+  }
+  if (a.xp != null) lin.push(`<div class="an-line"><span>Próxima jornada</span><b>${a.xp.toLocaleString("es-ES")} pts esperados</b></div>
+    <div class="an-sub">${a.pt} % de ser titular (minutos recientes y estado)</div>`);
+  const fx = fixtureChips(c, p.teamId, 5);
+  return `<div class="chart-card">
+    <div class="chart-head"><h4>🔮 Previsión</h4><button class="link-btn" onclick="openFiabilidad()">¿Cuánto acierta? ›</button></div>
+    ${lin.join("")}
+    ${fx ? `<div class="an-sub" style="margin-top:10px">Calendario (facilidad de cada partido):</div>${fx}` : ""}
+  </div>`;
+}
+/* lo que cabe en una fila de mercado: «🔮 +120K · 82%» y la puja ideal */
+function anMarketFacts(c, pid, precio){
+  const a = anP(c, pid);
+  if (!a || a.pred == null) return "";
+  const ideal = Math.max(+precio || 0, a.pi || 0);
+  return `<div class="mk-fact"><div class="n">${fmtM(ideal)} €</div><div class="l">Puja ideal</div></div>`;
+}
+
+/* ---------- pantalla de Predicciones ---------- */
+/* si la analítica no llegó al arrancar (mala cobertura, corte…), se vuelve a pedir */
+let _anTry = 0;
+async function ensureAnalitica(){
+  if (Date.now() - _anTry < 20000) return;
+  _anTry = Date.now();
+  state.analitica = state.analitica || {};
+  for (const c of ["1", "2"]) {
+    if (!state.analitica[c]) { try { state.analitica[c] = await fetchJSON(`data/analitica_${c}.json`); } catch(e) {} }
+  }
+  if (AN(comp()) && state.view === "predicciones") render();
+}
+function viewPredicciones(){
+  const c = comp();
+  const A = AN(c);
+  if (!A) {
+    setTimeout(ensureAnalitica, 30);
+    return `<div class="card"><div class="empty-state"><div class="big">🔮</div>Cargando las predicciones…<br><span style="font-size:11.5px;color:var(--text-3)">Se calculan cada noche tras la actualización de la 01:00.</span></div></div>`;
+  }
+  const filtro = state.predFiltro || "todos";
+  const mios = new Set(state.squad[c].filter(e => !e.custom).map(e => String(e.pid)));
+  const vig = new Set((state.watch[c] || []).map(w => String(w.pid)));
+  const pool = (state.players[c] || []).filter(p => {
+    const id = String(p.id);
+    if (filtro === "mios") return mios.has(id);
+    if (filtro === "vigilados") return vig.has(id) || isFav(id);
+    return true;
+  });
+  const con = pool.map(p => ({ p, a: anP(c, p.id) })).filter(x => x.a && x.a.pred != null);
+  const suben = con.filter(x => x.a.pred > 0).sort((x, y) => y.a.pred - x.a.pred).slice(0, filtro === "todos" ? 15 : 99);
+  const bajan = con.filter(x => x.a.pred < 0).sort((x, y) => x.a.pred - y.a.pred).slice(0, filtro === "todos" ? 15 : 99);
+  const giros = con.filter(x => anGiro(c, x.p.id)).sort((x, y) => Math.abs(y.a.pred) - Math.abs(x.a.pred)).slice(0, 12);
+  const fila = x => playerRow(x.p, { reason: predChip(c, x.p.id, { sinGiro: true }) });
+  const total = filtro === "mios" ? con.reduce((s, x) => s + x.a.pred, 0) : null;
+  const ex = A.examen?.precio;
+  const chips = [["todos", "Todo el mercado"], ["mios", "Mi plantilla"], ["vigilados", "Vigilados y favoritos"]]
+    .map(([k, l]) => `<button class="chip ${filtro === k ? "active" : ""}" onclick="state.predFiltro='${k}';render()">${l}</button>`).join("");
+
+  // mejores puntos esperados de la próxima jornada, por posición
+  const porPos = ["1", "2", "3", "4"].map(pos => {
+    const top = (state.players[c] || []).filter(p => String(p.positionId) === pos && anP(c, p.id)?.xp != null)
+      .sort((x, y) => anP(c, y.id).xp - anP(c, x.id).xp).slice(0, 5);
+    return top.length ? `<div class="pl-group-head">${(POS[pos] || {}).tag || pos}</div><div class="card" style="margin-bottom:8px">${top.map(p =>
+      playerRow(p, { reason: `<b>${anP(c, p.id).xp.toLocaleString("es-ES")} pts</b> · ${anP(c, p.id).pt}% tit.`, noSpark: true })).join("")}</div>` : "";
+  }).join("");
+
+  // calendario: cada equipo y sus próximos 5 partidos, del más fácil al más difícil
+  const eqs = Object.entries(A.equipos?.partidos || {}).map(([tid, lst]) => ({ tid, lst, media: lst.reduce((s, m) => s + m[3], 0) / lst.length }))
+    .sort((a, b) => b.media - a.media);
+  const ticker = eqs.length ? `<div class="card" style="padding:10px 12px">${eqs.map(e => {
+    const t = state.teams.get(e.tid);
+    return `<div class="fx-team"><div class="fx-name">${t?.badgeColor ? `<img src="${esc(t.badgeColor)}" alt="">` : ""}${esc(t?.shortName || t?.name || e.tid)}<span>${Math.round(e.media)}%</span></div>${fixtureChips(c, e.tid, 5)}</div>`;
+  }).join("")}</div>` : "";
+
+  return `
+  <div class="card" style="padding:13px 15px;margin-bottom:12px;font-size:12.5px;color:var(--text-2);line-height:1.6">
+    🔮 Previsión para la <b>actualización de mañana a la 01:00</b>, calculada tras la de hoy.
+    ${ex ? `En los últimos 14 días acertó la dirección el <b>${Math.round(ex.direccion * 100)} %</b> de las veces
+      y, cuando da más de un 80 %, el <b>${Math.round((ex.acierto_si_80 || 0) * 100)} %</b>.` : ""}
+    <button class="link-btn" onclick="openFiabilidad()">Ver el examen completo ›</button>
+  </div>
+  <div class="chips-row no-scrollbar">${chips}</div>
+  ${total != null ? `<div class="card" style="padding:13px 15px;margin-bottom:12px;font-size:14px">Tu plantilla mañana: <b class="${cls(total)}">${fmtMSign(total)}</b> previsto</div>` : ""}
+  <div class="section-title"><span class="up">▲</span> Se espera que suban</div>
+  <div class="card">${suben.length ? suben.map(fila).join("") : `<div class="empty-state" style="padding:20px">Nadie aquí</div>`}</div>
+  <div class="section-title"><span class="down">▼</span> Se espera que bajen</div>
+  <div class="card">${bajan.length ? bajan.map(fila).join("") : `<div class="empty-state" style="padding:20px">Nadie aquí</div>`}</div>
+  ${giros.length ? `<div class="section-title">↺ Posibles giros (señal fuerte)</div>
+    <div style="font-size:11px;color:var(--text-3);margin:-4px 4px 8px">Jugadores que hoy van en una dirección y el modelo cree que mañana cambian. Solo sale con la probabilidad que el examen ha validado.</div>
+    <div class="card">${giros.map(x => playerRow(x.p, { reason: predChip(c, x.p.id) + ` <span style="font-size:10.5px;color:var(--text-3)">(hoy ${fmtMSign(deltas(c, x.p.id).d1)})</span>` })).join("")}</div>` : ""}
+  <div class="section-title">⚽ Puntos esperados · próxima jornada</div>
+  ${porPos}
+  <div class="section-title">📅 Calendario · próximas 5 jornadas</div>
+  <div style="font-size:11px;color:var(--text-3);margin:-4px 4px 8px">Facilidad de cada partido (0-100) según un modelo de goles esperados por equipo. «·f» = fuera de casa.</div>
+  ${ticker}`;
+}
+
+/* ---------- el examen, en cristiano ---------- */
+function openFiabilidad(){
+  const c = comp();
+  const ex = AN(c)?.examen || {};
+  const p = ex.precio, k = ex.calendario, x = ex.puntos;
+  const pc = v => Math.round((v || 0) * 100) + " %";
+  openModal(`${modalHead("🔮 ¿Cuánto aciertan las predicciones?")}
+    <div class="modal-body" style="font-size:13px;line-height:1.65;color:var(--text-2)">
+      <p style="margin-top:0">Cada noche cada modelo se examina con datos que <b>no ha visto</b> al entrenar. Estos son sus resultados de hoy, sin maquillar.</p>
+      ${p ? `<div class="chart-card"><h4>Precio de mañana · últimos ${p.dias} días (${nfES.format(p.casos)} casos)</h4>
+        Acierta si sube o baja: <b>${pc(p.direccion)}</b> (repetir lo de hoy acertaría un ${pc(p.direccion_ingenua)}).<br>
+        Error medio: <b>${fmtM(p.error_medio)} €</b> (repitiendo lo de hoy: ${fmtM(p.error_ingenuo)} €).<br>
+        Cuando da más de un 80 %, acierta el <b>${pc(p.acierto_si_80)}</b>.<br>
+        ${p.umbral_giro ? `Los «posibles giros» se avisan desde un ${Math.round(p.umbral_giro * 100)} % de probabilidad y aciertan el <b>${pc(p.acierto_giro)}</b>.` : ""}
+      </div>` : ""}
+      ${k ? `<div class="chart-card"><h4>Calendario · últimas ${k.jornadas} jornadas (${k.partidos} partidos)</h4>
+        Acierta el ganador (1X2) el <b>${pc(k.acierto_1x2)}</b> de las veces.<br>
+        Sus probabilidades son un <b>${pc(k.mejora)}</b> más finas que usar solo las frecuencias de la liga.
+        ${k.mejora < 0.06 ? `<br><span style="color:var(--orange)">En esta competición los partidos están muy igualados: usa la facilidad como orientación, no como pronóstico.</span>` : ""}
+      </div>` : ""}
+      ${x ? `<div class="chart-card"><h4>Puntos esperados · últimas ${x.jornadas} jornadas (${nfES.format(x.casos)} casos)</h4>
+        Error medio: <b>${String(x.error_xp).replace(".", ",")} pts</b> por jugador (con su media de temporada: ${String(x.error_media_temporada).replace(".", ",")}).<br>
+        <span style="color:var(--text-3)">Los puntos del fantasy tienen mucho azar: ninguna herramienta lo hace mucho mejor.</span>
+      </div>` : ""}
+      <div style="font-size:11px;color:var(--text-3)">Actualizado: ${AN(c)?.generado ? new Date(AN(c).generado).toLocaleString("es-ES") : "—"}</div>
+    </div>`);
 }
 
 function statTile(lbl, val, sub){
@@ -1963,6 +2167,8 @@ function starterProb(c, pid){
 function starterBadge(c, pid){
   const s = starterProb(c, pid);
   if (!s || s.weeks < 1) return null;
+  const a = anP(c, pid);
+  if (a && a.pt != null) s.prob = a.pt / 100; // ponderada por recencia y estado
   if (s.prob >= 0.75) return { txt: "titular fijo", cls: "green", pct: s };
   if (s.prob >= 0.4) return { txt: "rotación", cls: "orange", pct: s };
   return { txt: "suplente", cls: "red", pct: s };
@@ -2547,6 +2753,7 @@ function openPlayer(pid){
       </div>
 
       ${ownHtml}
+      ${anCard(c, p)}
 
       <div class="chart-card">
         <div class="chart-head"><h4>Valor de mercado · ${dir7}</h4>
@@ -2978,6 +3185,14 @@ function setChartRange(n){
 /* proyección de valor a 7 días con la pendiente reciente (misma matemática
    que el objetivo inteligente) */
 function projectValue(c, pid){
+  // con analítica: la previsión de mañana proyectada 7 días con la inercia medida
+  const a = anP(c, pid), rho = AN(c)?.inercia;
+  if (a && a.pred != null && rho) {
+    const p = state.byId[c].get(String(pid));
+    const val = p ? pVal(p) : 0;
+    const g = a.pred * (1 - Math.pow(rho, 7)) / (1 - rho);
+    if (val) return Math.round(Math.max(val * 0.75, Math.min(val * 1.25, val + g)));
+  }
   const h = (state.history[c] || {})[String(pid)];
   if (!h || h.length < 4) return null;
   const seg = h.slice(-6);
@@ -4579,6 +4794,21 @@ function openBidModal(marketId, pidStr, price, myBid, exp){
         ${money != null ? `<br>Tu dinero: <b>${fmt(money)}</b>` : ""}
       </div>
       ${moneyInput("bidAmount", "Tu puja", myBid ? +myBid.money : +price, "La puja más alta se lleva al jugador cuando expire el mercado")}
+      ${(() => {
+        const a = anP(c, pidStr);
+        if (!a || a.pred == null) return "";
+        const ideal = Math.max(+price, a.pi || 0), maxi = Math.max(+price, a.pm || 0);
+        const llegan = (possibleBidders(c, maxi) || []).map(r => esc(r.manager || r.name));
+        return `<div class="card" style="padding:10px 13px;margin:-4px 0 12px;font-size:12px;line-height:1.55">
+          🔮 Mañana: <b class="${cls(a.pred)}">${a.pred ? fmtMSign(a.pred) : "="}</b> (${anProb(a)} %) ·
+          puja ideal <b>${fmtM(ideal)}</b> · máxima <b>${fmtM(maxi)}</b>
+          <div style="display:flex;gap:6px;margin-top:8px">
+            <button class="btn-ghost" style="flex:1;padding:7px;font-size:11.5px" onclick="const i=document.getElementById('bidAmount');i.value='${ideal}';i.dispatchEvent(new Event('input'))">Usar ideal</button>
+            <button class="btn-ghost" style="flex:1;padding:7px;font-size:11.5px" onclick="const i=document.getElementById('bidAmount');i.value='${maxi}';i.dispatchEvent(new Event('input'))">Usar máxima</button>
+          </div>
+          ${llegan.length ? `<div style="color:var(--text-3);margin-top:6px">Con dinero para llegar a la máxima: ${llegan.join(", ")}</div>` : ""}
+        </div>`;
+      })()}
       <div id="bidSim" style="margin-bottom:12px"></div>
       <button class="btn-acc" style="width:100%" id="bidGo">${myBid ? "Guardar puja" : "Confirmar puja"}</button>
       ${myBid?.id ? `<button class="btn-ghost btn-danger" style="width:100%;margin-top:9px" id="bidCancel">Retirar mi puja</button>` : ""}
@@ -5227,6 +5457,7 @@ function ligaTabMercado(c, d){
           ${dd ? `<div class="p-meta" style="margin-top:5px">
             <span class="delta-pill ${cls(dd.d1)}">${dd.d1 ? fmtMSign(dd.d1) : "="} hoy</span>
             <span class="delta-pill ${cls(dd.d7)}">${fmtMSign(dd.d7)} · 7d</span></div>` : ""}
+          ${local && anP(c, pid) ? `<div class="p-meta" style="margin-top:5px">${predChip(c, pid)}</div>` : ""}
         </div>
         <div style="text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:3px">
           ${local ? miniSpark(c, pid, 30) : ""}
@@ -5239,6 +5470,7 @@ function ligaTabMercado(c, d){
         <div class="mk-fact"><div class="n">${mv != null ? fmtM(mv) + " €" : "—"}</div><div class="l">Vale</div></div>
         <div class="mk-fact"><div class="n">${bids != null ? bids : "—"}</div><div class="l">${bids === 1 ? "Puja" : "Pujas"}</div></div>
         <div class="mk-fact"><div class="n">${exp ? new Date(exp).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}) : "—"}</div><div class="l">Hasta</div></div>
+        ${local ? anMarketFacts(c, pid, price) : ""}
       </div>
       <div class="mk-actions">
         ${btn}
@@ -5402,13 +5634,15 @@ function ligaTabOnce(c, d){
     if (!local) return { pm, pid, pos: String(pm.positionId ?? "3"), score: 0, why: "sin datos", ok: true };
     const riv = rivalDifficulty(c, local.teamId);
     const okStatus = local.playerStatus === "ok";
-    let score = form3(local) * 2 + (local.averagePoints || 0);
-    if (riv) score += riv.level === 1 ? 1.5 : riv.level === 3 ? -1.5 : 0;
-    if (!okStatus) score = -100;
-    const why = okStatus
-      ? `forma ${n1(form3(local))} · media ${n1(local.averagePoints || 0)}${riv && riv.rival ? ` · vs ${esc(riv.rival.shortName || riv.rival.name)} ${riv.level === 1 ? "🟢" : riv.level === 3 ? "🔴" : "🟡"}` : ""}`
+    const axp = anP(c, pid);
+    let score = axp && axp.xp != null ? axp.xp : form3(local) * 2 + (local.averagePoints || 0);
+    if (!axp && riv) score += riv.level === 1 ? 1.5 : riv.level === 3 ? -1.5 : 0;
+    const okStatus2 = okStatus || local.playerStatus === "doubtful"; // la duda ya va descontada en su xP
+    if (!okStatus2) score = -100;
+    const why = okStatus2
+      ? `${axp && axp.xp != null ? `${n1(axp.xp)} pts esperados · ${axp.pt}% titular` : `forma ${n1(form3(local))} · media ${n1(local.averagePoints || 0)}`}${riv && riv.rival ? ` · vs ${esc(riv.rival.shortName || riv.rival.name)} ${riv.level === 1 ? "🟢" : riv.level === 3 ? "🔴" : "🟡"}` : ""}`
       : (STATUS[local.playerStatus] || {}).label || "no disponible";
-    return { pm, pid, pos: String(local.positionId), score, why, ok: okStatus, local };
+    return { pm, pid, pos: String(local.positionId), score, why, ok: okStatus2, local };
   });
   const by = k => scored.filter(s => s.pos === k && s.pos !== "5").sort((a, b) => b.score - a.score);
   const G = by("1"), D = by("2"), M = by("3"), F = by("4");
@@ -5433,7 +5667,7 @@ function ligaTabOnce(c, d){
   <div class="card" style="padding:13px 15px;margin-bottom:12px;display:flex;align-items:center;gap:12px">
     <div style="font-family:'Sora',sans-serif;font-size:20px;font-weight:800;color:var(--acc)">${best.f.join("-")}</div>
     <div style="flex:1;font-size:12px;color:var(--text-2);line-height:1.5">
-      Once sugerido por <b>forma reciente, media y dificultad del próximo rival</b>. Los lesionados/sancionados quedan fuera solos.
+      Once sugerido por <b>puntos esperados</b> en la próxima jornada (forma, titularidad y rival). Los lesionados y sancionados quedan fuera solos; las dudas cuentan a medias.
     </div>
   </div>
   ${group("Portero", best.xi.slice(0, 1))}
