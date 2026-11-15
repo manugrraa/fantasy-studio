@@ -80,6 +80,19 @@ def lo_tuyo(pers, dmap):
         L += tg.seccion("📈 <b>Suben</b>", [f"{p['nickname']}  <b>{tg.sign(d)}</b>" for p, d in sorted(ups, key=lambda x: -x[1])])
         L += tg.seccion("📉 <b>Bajan</b>", [f"{p['nickname']}  <b>{tg.sign(d)}</b>" for p, d in sorted(downs, key=lambda x: x[1])])
     L += tg.seccion("👁 <b>Tus vigilados</b>", vig)
+    # 🔮 previsión para mañana (scripts/analitica.py)
+    an = tg.load(f"analitica_{comp}.json", {})
+    jug = an.get("jugadores") or {}
+    pred = []
+    for e in squad:
+        a, r = jug.get(str(e["pid"])), dmap.get(str(e["pid"]))
+        if a and "pred" in a and r:
+            prob = a["ps"] if a["pred"] >= 0 else 100 - a["ps"]
+            pred.append((r[0]["nickname"], a["pred"], prob))
+    if pred:
+        tot = sum(x[1] for x in pred)
+        L += ["", f"🔮 Previsión para mañana: <b>{tg.sign(tot) if tot else 'sin cambios'}</b>"]
+        L += [f"• {n}  <b>{tg.sign(d) if d else '='}</b> ({p} %)" for n, d, p in sorted(pred, key=lambda x: -x[1])]
     return L
 
 

@@ -277,6 +277,29 @@ def main():
         # nunca antes de la 01:25 (los publica el juego a la 01:00; margen para
         # que todo asiente). UNA vez al dia: balance total de mi plantilla y
         # TODAS sus subidas y bajadas en lista, sin recortar nombres.
+        # 🚑 cambios de estado de MIS jugadores y vigilados (lesión, duda, sanción, alta)
+        log = load(f"status_log_{comp}.json", {})
+        vistos = state.setdefault("estado", {})
+        mios = {str(e.get("pid")) for e in (personal.get("squad") or {}).get(comp) or [] if e.get("pid") and not e.get("custom")}
+        vig = {str(w.get("pid")) for w in (personal.get("watch") or {}).get(comp) or [] if w.get("pid")}
+        ETQ = {"ok": ("✅", "disponible"), "injured": ("🚑", "lesionado"), "doubtful": ("⚠️", "en duda"),
+               "suspended": ("🟥", "sancionado"), "out_of_league": ("✈️", "fuera de la liga")}
+        for pid in sorted(mios | vig):
+            e = log.get(pid)
+            if not e or "prev" not in e or e.get("d") != today or e.get("s") == e.get("prev"):
+                continue
+            k = f"{comp}:{pid}:{e['d']}:{e['s']}"
+            if vistos.get(k):
+                continue
+            vistos[k] = today
+            p = players.get(pid)
+            ico, txt = ETQ.get(e["s"], ("ℹ️", str(e["s"])))
+            antes = ETQ.get(e.get("prev"), ("", str(e.get("prev"))))[1]
+            quien = "tu plantilla" if pid in mios else "vigilado"
+            alerts.append(("Cambio de estado", f"{ico} <b>{(p or {}).get('nickname', pid)}</b> ({quien}): {antes} → <b>{txt}</b>"))
+        for k in [k for k, v in vistos.items() if v < today - 100]:  # limpieza (~1 mes)
+            del vistos[k]
+
         vday = load("values_day.json", {})
         dia = state.setdefault("dia", {})
         ahora = madrid_now()
@@ -311,6 +334,29 @@ def main():
                     bloque.append("")
                     bloque.append("📉 <b>Bajan</b>")
                     bloque.extend(f"• {p['nickname']}  <b>{sign(d)}</b>" for p, d in downs)
+                # 🔮 lo que se espera para mañana (analítica recién calculada en este ciclo)
+                an = load(f"analitica_{comp}.json", {})
+                if an.get("dia") == today:
+                    jug = an.get("jugadores") or {}
+                    u = ((an.get("examen") or {}).get("precio") or {}).get("umbral_giro")
+                    tot, giros = 0, []
+                    for e in (personal.get("squad") or {}).get(comp) or []:
+                        a = jug.get(str(e.get("pid")))
+                        r = val_d1(e.get("pid")) if e.get("pid") else None
+                        if not a or "pred" not in a or not r:
+                            continue
+                        tot += a["pred"]
+                        d1 = r[2]
+                        if u and d1:
+                            contraria = 100 - a["ps"] if d1 > 0 else a["ps"]
+                            if contraria >= u * 100:
+                                giros.append(f"{r[0]['nickname']}: podría dejar de {'subir' if d1 > 0 else 'bajar'} ({contraria} %)")
+                    bloque.append("")
+                    bloque.append(f"🔮 Mañana se espera: <b>{sign(tot) if tot else 'sin cambios'}</b>")
+                    if giros:
+                        bloque.append("")
+                        bloque.append("↺ <b>Posibles giros</b>")
+                        bloque.extend(f"• {g}" for g in giros)
                 alerts.append(("Precios actualizados", "\n".join(bloque)))
 
     if not alerts:

@@ -110,6 +110,9 @@ def main():
 
     # mi plantilla: bajas y puntuacion de cada uno
     squad = (personal.get("squad") or {}).get(COMP) or []
+    _an = load(f"analitica_{COMP}.json", {}) or {}
+    an_jug = _an.get("jugadores") or {}
+    an_part = (_an.get("equipos") or {}).get("partidos") or {}
     bajas, cands = [], []
     ETIQ = {"injured": "lesionado", "suspended": "sancionado", "doubtful": "duda"}
     for e in squad:
@@ -128,8 +131,16 @@ def main():
             s = strength.get(riv, avg_str)
             bonus = 1.5 if s < avg_str - 1 else -1.5 if s > avg_str + 1 else 0
             emoji = "🟢" if bonus > 0 else "🔴" if bonus < 0 else "🟡"
+            # con analítica: color por la facilidad del modelo de goles esperados
+            nx = (an_part.get(str(p["teamId"])) or [None])[0]
+            if nx and str(nx[1]) == riv:
+                emoji = "🟢" if nx[3] >= 58 else "🔴" if nx[3] <= 42 else "🟡"
             riv_txt = f"{'vs' if home else 'en'} {teams.get(riv, {}).get('shortName', '?')} {emoji}"
         score = form3(p) * 2 + (p.get("averagePoints") or 0) + bonus
+        a = an_jug.get(str(p["id"])) or {}
+        if a.get("xp") is not None:   # puntos esperados (modelo examinado a diario)
+            score = a["xp"]
+            riv_txt = (riv_txt + " · " if riv_txt else "") + f"{a.get('pt', 0)}% titular"
         cands.append((score, p, riv_txt))
 
     POS = {"1": "POR", "2": "DEF", "3": "CEN", "4": "DEL"}
@@ -145,7 +156,8 @@ def main():
                 continue
             nota = f"{score:.1f}".replace(".", ",")
             filas.append(f"{POS[str(p['positionId'])]} · {p['nickname']}  <b>{nota}</b>" + (f"  {riv_txt}" if riv_txt else ""))
-        L += tg.seccion("📋 <b>Tus cartas, de mejor a peor</b> (forma + media + rival)", filas)
+        L += tg.seccion("📋 <b>Tus cartas, de mejor a peor</b> (puntos esperados)" if an_jug else
+                        "📋 <b>Tus cartas, de mejor a peor</b> (forma + media + rival)", filas)
 
     # vigilados a punto de objetivo
     hist = load(f"history_{COMP}.json", {})
